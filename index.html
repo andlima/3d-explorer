@@ -14,18 +14,43 @@
       canvas {
         display: block;
       }
+      #controls-panel {
+        position: fixed;
+        top: 12px;
+        right: 12px;
+        padding: 8px 12px;
+        background: rgba(0, 0, 0, 0.55);
+        color: #f5f5f5;
+        font: 14px/1.2 system-ui, sans-serif;
+        border-radius: 6px;
+        user-select: none;
+      }
+      #controls-panel label {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        cursor: pointer;
+      }
     </style>
     <script type="importmap">
       {
         "imports": {
-          "three": "https://unpkg.com/three@0.160.0/build/three.module.js"
+          "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+          "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
         }
       }
     </script>
   </head>
   <body>
+    <div id="controls-panel">
+      <label>
+        <input type="checkbox" id="auto-rotate-toggle" checked />
+        Auto-rotate cube
+      </label>
+    </div>
     <script type="module">
       import * as THREE from 'three';
+      import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
       const scene = new THREE.Scene();
       scene.background = new THREE.Color(0x111111);
@@ -44,6 +69,9 @@
       renderer.setSize(window.innerWidth, window.innerHeight);
       document.body.appendChild(renderer.domElement);
 
+      const controls = new OrbitControls(camera, renderer.domElement);
+      controls.enableDamping = true;
+
       const cube = new THREE.Mesh(
         new THREE.BoxGeometry(1, 1, 1),
         new THREE.MeshStandardMaterial({ color: 0x4f9eff, roughness: 0.4, metalness: 0.1 }),
@@ -55,6 +83,12 @@
       sun.position.set(3, 4, 2);
       scene.add(sun);
 
+      const autoRotateToggle = document.getElementById('auto-rotate-toggle');
+      let autoRotate = autoRotateToggle.checked;
+      autoRotateToggle.addEventListener('change', () => {
+        autoRotate = autoRotateToggle.checked;
+      });
+
       window.addEventListener('resize', () => {
         camera.aspect = window.innerWidth / window.innerHeight;
         camera.updateProjectionMatrix();
@@ -62,8 +96,11 @@
       });
 
       function animate() {
-        cube.rotation.x += 0.01;
-        cube.rotation.y += 0.013;
+        if (autoRotate) {
+          cube.rotation.x += 0.01;
+          cube.rotation.y += 0.013;
+        }
+        controls.update();
         renderer.render(scene, camera);
         requestAnimationFrame(animate);
       }
