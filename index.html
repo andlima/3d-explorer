@@ -42,6 +42,59 @@
       #lock-overlay.hidden {
         display: none;
       }
+      #crosshair {
+        position: fixed;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        width: 12px;
+        height: 12px;
+        pointer-events: none;
+        z-index: 5;
+        color: #ffffff;
+        font: bold 14px/12px monospace;
+        text-align: center;
+        text-shadow:
+          1px 0 0 #000,
+          -1px 0 0 #000,
+          0 1px 0 #000,
+          0 -1px 0 #000;
+      }
+      #crosshair.hidden {
+        display: none;
+      }
+      #mode-indicator {
+        position: fixed;
+        top: 8px;
+        left: 8px;
+        padding: 4px 8px;
+        background: rgba(0, 0, 0, 0.6);
+        color: #ffffff;
+        font: 12px/1 monospace;
+        border-radius: 3px;
+        pointer-events: none;
+        z-index: 5;
+      }
+      #mode-indicator.hidden {
+        display: none;
+      }
+      #info-card {
+        position: fixed;
+        bottom: 24px;
+        left: 50%;
+        transform: translateX(-50%);
+        padding: 8px 12px;
+        background: rgba(0, 0, 0, 0.7);
+        color: #ffffff;
+        font: 13px/1.4 monospace;
+        border-radius: 4px;
+        pointer-events: none;
+        z-index: 5;
+        white-space: pre;
+      }
+      #info-card.hidden {
+        display: none;
+      }
     </style>
     <script type="importmap">
       {
@@ -55,8 +108,11 @@
   <body>
     <div id="lock-overlay">
       <h1>Click to play</h1>
-      <p>WASD / arrows to move &middot; Shift to sprint &middot; Space to jump &middot; R to randomize &middot; mouse to look &middot; ESC to release</p>
+      <p>WASD / arrows to move &middot; Shift to sprint &middot; Space to jump &middot; R to randomize &middot; C to toggle camera &middot; mouse to look &middot; ESC to release</p>
     </div>
+    <div id="mode-indicator" class="hidden">CAM ON</div>
+    <div id="crosshair" class="hidden">+</div>
+    <div id="info-card" class="hidden"></div>
     <script type="module">
       import * as THREE from 'three';
       import { PointerLockControls } from 'three/addons/controls/PointerLockControls.js';
@@ -340,6 +396,51 @@
         overlay.classList.remove('hidden');
       });
 
+      const DEFAULT_FOV = 60;
+      const MIN_FOV = 20;
+      const MAX_FOV = 60;
+      const HIGHLIGHT_DURATION = 0.6;
+      const INFO_DURATION = 2.5;
+      const TEXTURE_NAMES = ['checker', 'stripes', 'dots', 'noise'];
+
+      const crosshairEl = document.getElementById('crosshair');
+      const modeIndicatorEl = document.getElementById('mode-indicator');
+      const infoCardEl = document.getElementById('info-card');
+
+      let cameraMode = false;
+      let targetFov = DEFAULT_FOV;
+      let infoTimer = 0;
+      const raycaster = new THREE.Raycaster();
+      const aimNdc = new THREE.Vector2(0, 0);
+
+      function setCameraMode(on) {
+        cameraMode = on;
+        if (on) {
+          crosshairEl.classList.remove('hidden');
+          modeIndicatorEl.classList.remove('hidden');
+        } else {
+          crosshairEl.classList.add('hidden');
+          modeIndicatorEl.classList.add('hidden');
+          targetFov = DEFAULT_FOV;
+        }
+      }
+
+      function showInfoCard(prop) {
+        infoCardEl.textContent =
+          `shape: ${prop.info.shape}\n` +
+          `dims: ${prop.info.dims}\n` +
+          `color: ${prop.info.colorHex}\n` +
+          `material: rough=${prop.info.roughness.toFixed(2)} metal=${prop.info.metalness.toFixed(2)}\n` +
+          `texture: ${prop.info.textureName}`;
+        infoCardEl.classList.remove('hidden');
+        infoTimer = INFO_DURATION;
+      }
+
+      function hideInfoCard() {
+        infoCardEl.classList.add('hidden');
+        infoTimer = 0;
+      }
+
       const keys = Object.create(null);
       let jumpQueued = false;
       let regenerateRequested = false;
@@ -351,9 +452,38 @@
         if (e.code === 'KeyR' && !e.repeat) {
           regenerateRequested = true;
         }
+        if (e.code === 'KeyC' && !e.repeat) {
+          setCameraMode(!cameraMode);
+        }
       });
       window.addEventListener('keyup', (e) => {
         keys[e.code] = false;
+      });
+
+      window.addEventListener(
+        'wheel',
+        (e) => {
+          if (!cameraMode) return;
+          e.preventDefault();
+          targetFov = Math.max(
+            MIN_FOV,
+            Math.min(MAX_FOV, targetFov + Math.sign(e.deltaY) * 5),
+          );
+        },
+        { passive: false },
+      );
+
+      window.addEventListener('mousedown', (e) => {
+        if (e.button !== 0) return;
+        if (!cameraMode || !controls.isLocked) return;
+        raycaster.setFromCamera(aimNdc, camera);
+        const hits = raycaster.intersectObjects(props.map((p) => p.mesh));
+        if (hits.length === 0) return;
+        const hitMesh = hits[0].object;
+        const hitProp = props.find((p) => p.mesh === hitMesh);
+        if (!hitProp) return;
+        hitProp.highlightT = HIGHLIGHT_DURATION;
+        showInfoCard(hitProp);
       });
 
       window.addEventListener('resize', () => {
@@ -413,6 +543,8 @@
             let halfZ;
             let topY;
             let maxExtent;
+            let shapeName;
+            let dimsStr;
 
             if (shapeIdx === 0) {
               const w = 0.6 + rng() * 1.9;
@@ -424,6 +556,8 @@
               halfZ = d / 2;
               topY = h;
               maxExtent = Math.max(w, h, d);
+              shapeName = 'Box';
+              dimsStr = `${w.toFixed(2)} × ${h.toFixed(2)} × ${d.toFixed(2)}`;
             } else if (shapeIdx === 1) {
               const r = 0.5 + rng() * 1.0;
               geometry = new THREE.SphereGeometry(r, 16, 12);
@@ -432,6 +566,8 @@
               halfZ = r;
               topY = 2 * r;
               maxExtent = 2 * r;
+              shapeName = 'Sphere';
+              dimsStr = `r=${r.toFixed(2)}`;
             } else if (shapeIdx === 2) {
               const r = 0.4 + rng() * 0.8;
               const h = 0.6 + rng() * 1.9;
@@ -441,6 +577,8 @@
               halfZ = r;
               topY = h;
               maxExtent = Math.max(2 * r, h);
+              shapeName = 'Cylinder';
+              dimsStr = `r=${r.toFixed(2)} h=${h.toFixed(2)}`;
             } else {
               const r = 0.4 + rng() * 0.8;
               const h = 0.8 + rng() * 2.2;
@@ -450,6 +588,8 @@
               halfZ = r;
               topY = h;
               maxExtent = Math.max(2 * r, h);
+              shapeName = 'Cone';
+              dimsStr = `r=${r.toFixed(2)} h=${h.toFixed(2)}`;
             }
 
             const aabb = {
@@ -490,7 +630,8 @@
               continue;
             }
 
-            const baseTexture = baseTextures[Math.floor(rng() * 4)];
+            const textureIdx = Math.floor(rng() * 4);
+            const baseTexture = baseTextures[textureIdx];
             const tex = baseTexture.clone();
             tex.needsUpdate = true;
             tex.wrapS = THREE.RepeatWrapping;
@@ -511,13 +652,24 @@
               roughness,
               metalness,
             });
+            material.emissive.setRGB(1, 1, 1);
+            material.emissiveIntensity = 0;
 
             const mesh = new THREE.Mesh(geometry, material);
             mesh.position.set(posX, posY, posZ);
             mesh.rotation.y = rng() * Math.PI * 2;
 
+            const info = {
+              shape: shapeName,
+              dims: dimsStr,
+              colorHex: '#' + color.getHexString(),
+              roughness,
+              metalness,
+              textureName: TEXTURE_NAMES[textureIdx],
+            };
+
             scene.add(mesh);
-            props.push({ mesh, aabb });
+            props.push({ mesh, aabb, info, highlightT: 0 });
             placed = true;
           }
         }
@@ -599,10 +751,29 @@
         starMaterial.uniforms.uOpacity.value =
           1 - THREE.MathUtils.smoothstep(sunDir.y, -0.25, -0.05);
 
+        camera.fov += (targetFov - camera.fov) * Math.min(1, delta * 8);
+        camera.updateProjectionMatrix();
+
+        for (const prop of props) {
+          if (prop.highlightT > 0) {
+            prop.highlightT = Math.max(0, prop.highlightT - delta);
+            prop.mesh.material.emissiveIntensity =
+              (prop.highlightT / HIGHLIGHT_DURATION) * 0.8;
+          }
+        }
+
+        if (infoTimer > 0) {
+          infoTimer -= delta;
+          if (infoTimer <= 0) {
+            hideInfoCard();
+          }
+        }
+
         if (regenerateRequested) {
           seed = (seed + 1) | 0;
           generate(seed);
           resetPlayerToSpawn();
+          hideInfoCard();
           regenerateRequested = false;
         }
 
