@@ -97,6 +97,8 @@
       const DAY_LENGTH = 60;
       const SKY_RADIUS = 80;
       const SUN_DISTANCE = 75;
+      const STAR_RADIUS = 76;
+      const STAR_COUNT = 500;
 
       const skyTopColor = new THREE.Color();
       const skyHorizonColor = new THREE.Color();
@@ -142,6 +144,74 @@
       );
       moonDisc.renderOrder = -1;
       scene.add(moonDisc);
+
+      const starMaterial = new THREE.ShaderMaterial({
+        uniforms: {
+          uTime: { value: 0 },
+          uOpacity: { value: 0 },
+          uPixelRatio: { value: renderer.getPixelRatio() },
+        },
+        vertexShader: /* glsl */ `
+          attribute float aPhase;
+          attribute float aFrequency;
+          attribute float aSize;
+          uniform float uTime;
+          uniform float uPixelRatio;
+          varying float vTwinkle;
+          void main() {
+            vTwinkle = 0.65 + 0.35 * sin(uTime * aFrequency + aPhase);
+            vec4 mvPos = modelViewMatrix * vec4(position, 1.0);
+            gl_PointSize = aSize * uPixelRatio;
+            gl_Position = projectionMatrix * mvPos;
+          }
+        `,
+        fragmentShader: /* glsl */ `
+          uniform float uOpacity;
+          varying float vTwinkle;
+          void main() {
+            vec2 c = gl_PointCoord - vec2(0.5);
+            if (dot(c, c) > 0.25) discard;
+            gl_FragColor = vec4(1.0, 1.0, 1.0, uOpacity * vTwinkle);
+          }
+        `,
+        transparent: true,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending,
+      });
+
+      function createStars() {
+        const starRng = mulberry32(0xc0ffee);
+        const positions = new Float32Array(STAR_COUNT * 3);
+        const phases = new Float32Array(STAR_COUNT);
+        const frequencies = new Float32Array(STAR_COUNT);
+        const sizes = new Float32Array(STAR_COUNT);
+        for (let i = 0; i < STAR_COUNT; i++) {
+          const u = starRng();
+          const v = starRng();
+          const phi = 2 * Math.PI * u;
+          const cosTheta = 2 * v - 1;
+          const sinTheta = Math.sqrt(1 - cosTheta * cosTheta);
+          positions[i * 3 + 0] = STAR_RADIUS * sinTheta * Math.cos(phi);
+          positions[i * 3 + 1] = STAR_RADIUS * cosTheta;
+          positions[i * 3 + 2] = STAR_RADIUS * sinTheta * Math.sin(phi);
+          phases[i] = starRng() * Math.PI * 2;
+          frequencies[i] = 0.5 + starRng() * 1.5;
+          sizes[i] = 1.0 + starRng() * 2.0;
+        }
+        const geometry = new THREE.BufferGeometry();
+        geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+        geometry.setAttribute('aPhase', new THREE.BufferAttribute(phases, 1));
+        geometry.setAttribute('aFrequency', new THREE.BufferAttribute(frequencies, 1));
+        geometry.setAttribute('aSize', new THREE.BufferAttribute(sizes, 1));
+        const points = new THREE.Points(geometry, starMaterial);
+        points.name = 'stars';
+        points.renderOrder = -1;
+        points.frustumCulled = false;
+        return points;
+      }
+
+      const stars = createStars();
+      scene.add(stars);
 
       const skyKeyframes = [
         { t: 0.0, top: new THREE.Color('#7891B8'), horizon: new THREE.Color('#FF9966') },
@@ -522,6 +592,12 @@
         sun.color.copy(warmLightColor).lerp(whiteLightColor, warmth);
 
         ambientLight.intensity = 0.15 + Math.max(0, sunDir.y) * 0.25;
+
+        stars.position.copy(camera.position);
+        stars.rotation.z = theta;
+        starMaterial.uniforms.uTime.value = elapsed;
+        starMaterial.uniforms.uOpacity.value =
+          1 - THREE.MathUtils.smoothstep(sunDir.y, -0.25, -0.05);
 
         if (regenerateRequested) {
           seed = (seed + 1) | 0;
