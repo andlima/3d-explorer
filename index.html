@@ -133,6 +133,7 @@
         depthWrite: false,
       });
       const skyDome = new THREE.Mesh(new THREE.SphereGeometry(SKY_RADIUS, 32, 16), skyMaterial);
+      skyDome.renderOrder = -2;
       scene.add(skyDome);
 
       const sunDisc = new THREE.Mesh(
