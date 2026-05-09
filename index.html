@@ -62,13 +62,12 @@
       import { PointerLockControls } from 'three/addons/controls/PointerLockControls.js';
 
       const scene = new THREE.Scene();
-      scene.background = new THREE.Color(0x111111);
 
       const camera = new THREE.PerspectiveCamera(
         60,
         window.innerWidth / window.innerHeight,
         0.1,
-        100,
+        200,
       );
       camera.position.set(0, 1.6, 5);
       camera.lookAt(0, 1.6, 0);
@@ -96,10 +95,83 @@
       cube.position.set(0, 0.5, 0);
       scene.add(cube);
 
-      scene.add(new THREE.AmbientLight(0xffffff, 0.3));
+      const ambientLight = new THREE.AmbientLight(0xffffff, 0.3);
+      scene.add(ambientLight);
       const sun = new THREE.DirectionalLight(0xffffff, 1.0);
       sun.position.set(3, 4, 2);
       scene.add(sun);
+
+      const DAY_LENGTH = 60;
+      const SKY_RADIUS = 80;
+      const SUN_DISTANCE = 75;
+
+      const skyTopColor = new THREE.Color();
+      const skyHorizonColor = new THREE.Color();
+      const skyMaterial = new THREE.ShaderMaterial({
+        uniforms: {
+          uTopColor: { value: skyTopColor },
+          uHorizonColor: { value: skyHorizonColor },
+        },
+        vertexShader: /* glsl */ `
+          varying vec3 vWorldDir;
+          void main() {
+            vec4 worldPos = modelMatrix * vec4(position, 1.0);
+            vWorldDir = normalize(worldPos.xyz - cameraPosition);
+            gl_Position = projectionMatrix * viewMatrix * worldPos;
+          }
+        `,
+        fragmentShader: /* glsl */ `
+          varying vec3 vWorldDir;
+          uniform vec3 uTopColor;
+          uniform vec3 uHorizonColor;
+          void main() {
+            float h = smoothstep(0.0, 0.5, normalize(vWorldDir).y);
+            gl_FragColor = vec4(mix(uHorizonColor, uTopColor, h), 1.0);
+          }
+        `,
+        side: THREE.BackSide,
+        depthWrite: false,
+      });
+      const skyDome = new THREE.Mesh(new THREE.SphereGeometry(SKY_RADIUS, 32, 16), skyMaterial);
+      scene.add(skyDome);
+
+      const sunDisc = new THREE.Mesh(
+        new THREE.SphereGeometry(1.5, 24, 16),
+        new THREE.MeshBasicMaterial({ color: 0xffe9a8, depthWrite: false }),
+      );
+      sunDisc.renderOrder = -1;
+      scene.add(sunDisc);
+
+      const moonDisc = new THREE.Mesh(
+        new THREE.SphereGeometry(1.5, 24, 16),
+        new THREE.MeshBasicMaterial({ color: 0xddddee, depthWrite: false }),
+      );
+      moonDisc.renderOrder = -1;
+      scene.add(moonDisc);
+
+      const skyKeyframes = [
+        { t: 0.0, top: new THREE.Color('#7891B8'), horizon: new THREE.Color('#FF9966') },
+        { t: 0.25, top: new THREE.Color('#5BA3DD'), horizon: new THREE.Color('#B0D8F0') },
+        { t: 0.5, top: new THREE.Color('#7891B8'), horizon: new THREE.Color('#FF7755') },
+        { t: 0.75, top: new THREE.Color('#02061A'), horizon: new THREE.Color('#0F1B40') },
+      ];
+      const warmLightColor = new THREE.Color('#FFD09E');
+      const whiteLightColor = new THREE.Color('#FFFFFF');
+      const sunDir = new THREE.Vector3();
+
+      function updateSkyColors(t) {
+        const segments = skyKeyframes.length;
+        let prevIdx = 0;
+        for (let i = 0; i < segments; i++) {
+          if (skyKeyframes[i].t <= t) prevIdx = i;
+        }
+        const prev = skyKeyframes[prevIdx];
+        const next = skyKeyframes[(prevIdx + 1) % segments];
+        const nextT = next.t > prev.t ? next.t : next.t + 1;
+        const u = (t - prev.t) / (nextT - prev.t);
+        skyTopColor.copy(prev.top).lerp(next.top, u);
+        skyHorizonColor.copy(prev.horizon).lerp(next.horizon, u);
+      }
 
       const controls = new PointerLockControls(camera, document.body);
       const overlay = document.getElementById('lock-overlay');
@@ -146,6 +218,26 @@
 
       function animate() {
         const delta = clock.getDelta();
+        const elapsed = clock.getElapsedTime();
+        const t = (elapsed % DAY_LENGTH) / DAY_LENGTH;
+        const theta = t * Math.PI * 2;
+        sunDir.set(Math.cos(theta), Math.sin(theta), 0);
+
+        updateSkyColors(t);
+
+        skyDome.position.copy(camera.position);
+        sunDisc.position.copy(camera.position).addScaledVector(sunDir, SUN_DISTANCE);
+        moonDisc.position.copy(camera.position).addScaledVector(sunDir, -SUN_DISTANCE);
+
+        sunDisc.visible = sunDir.y > 0;
+        moonDisc.visible = sunDir.y < 0;
+
+        sun.position.copy(sunDir).multiplyScalar(50);
+        sun.intensity = Math.max(0, sunDir.y) * 1.0;
+        const warmth = Math.max(0, Math.min(1, sunDir.y / 0.3));
+        sun.color.copy(warmLightColor).lerp(whiteLightColor, warmth);
+
+        ambientLight.intensity = 0.15 + Math.max(0, sunDir.y) * 0.25;
 
         let forward = 0;
         let right = 0;
