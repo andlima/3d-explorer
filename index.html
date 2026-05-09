@@ -55,7 +55,7 @@
   <body>
     <div id="lock-overlay">
       <h1>Click to play</h1>
-      <p>WASD / arrows to move &middot; Shift to sprint &middot; Space to jump &middot; mouse to look &middot; ESC to release</p>
+      <p>WASD / arrows to move &middot; Shift to sprint &middot; Space to jump &middot; R to randomize &middot; mouse to look &middot; ESC to release</p>
     </div>
     <script type="module">
       import * as THREE from 'three';
@@ -87,13 +87,6 @@
       const grid = new THREE.GridHelper(50, 50, 0x666666, 0x444444);
       grid.position.y = 0.01;
       scene.add(grid);
-
-      const cube = new THREE.Mesh(
-        new THREE.BoxGeometry(1, 1, 1),
-        new THREE.MeshStandardMaterial({ color: 0x4f9eff, roughness: 0.4, metalness: 0.1 }),
-      );
-      cube.position.set(0, 0.5, 0);
-      scene.add(cube);
 
       const ambientLight = new THREE.AmbientLight(0xffffff, 0.3);
       scene.add(ambientLight);
@@ -174,6 +167,97 @@
         skyHorizonColor.copy(prev.horizon).lerp(next.horizon, u);
       }
 
+      function mulberry32(a) {
+        return function () {
+          a |= 0;
+          a = (a + 0x6d2b79f5) | 0;
+          let t = Math.imul(a ^ (a >>> 15), 1 | a);
+          t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+          return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+        };
+      }
+
+      function makeCanvas(size = 256) {
+        const canvas = document.createElement('canvas');
+        canvas.width = size;
+        canvas.height = size;
+        return canvas;
+      }
+
+      function createCheckerTexture() {
+        const size = 256;
+        const cells = 8;
+        const cell = size / cells;
+        const canvas = makeCanvas(size);
+        const ctx = canvas.getContext('2d');
+        for (let y = 0; y < cells; y++) {
+          for (let x = 0; x < cells; x++) {
+            ctx.fillStyle = (x + y) % 2 === 0 ? '#FFFFFF' : '#202020';
+            ctx.fillRect(x * cell, y * cell, cell, cell);
+          }
+        }
+        return new THREE.CanvasTexture(canvas);
+      }
+
+      function createStripesTexture() {
+        const size = 256;
+        const stripes = 8;
+        const stripe = size / stripes;
+        const canvas = makeCanvas(size);
+        const ctx = canvas.getContext('2d');
+        for (let i = 0; i < stripes; i++) {
+          ctx.fillStyle = i % 2 === 0 ? '#FFFFFF' : '#404040';
+          ctx.fillRect(i * stripe, 0, stripe, size);
+        }
+        return new THREE.CanvasTexture(canvas);
+      }
+
+      function createDotsTexture() {
+        const size = 256;
+        const cells = 6;
+        const cell = size / cells;
+        const radius = 12;
+        const canvas = makeCanvas(size);
+        const ctx = canvas.getContext('2d');
+        ctx.fillStyle = '#F2F2F2';
+        ctx.fillRect(0, 0, size, size);
+        ctx.fillStyle = '#1A1A1A';
+        for (let y = 0; y < cells; y++) {
+          for (let x = 0; x < cells; x++) {
+            const cx = x * cell + cell / 2;
+            const cy = y * cell + cell / 2;
+            ctx.beginPath();
+            ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+            ctx.fill();
+          }
+        }
+        return new THREE.CanvasTexture(canvas);
+      }
+
+      function createNoiseTexture() {
+        const size = 256;
+        const canvas = makeCanvas(size);
+        const ctx = canvas.getContext('2d');
+        const img = ctx.createImageData(size, size);
+        const data = img.data;
+        for (let i = 0; i < size * size; i++) {
+          const v = Math.floor(Math.random() * 256);
+          data[i * 4 + 0] = v;
+          data[i * 4 + 1] = v;
+          data[i * 4 + 2] = v;
+          data[i * 4 + 3] = 255;
+        }
+        ctx.putImageData(img, 0, 0);
+        return new THREE.CanvasTexture(canvas);
+      }
+
+      const baseTextures = [
+        createCheckerTexture(),
+        createStripesTexture(),
+        createDotsTexture(),
+        createNoiseTexture(),
+      ];
+
       const controls = new PointerLockControls(camera, document.body);
       const overlay = document.getElementById('lock-overlay');
       overlay.addEventListener('click', () => {
@@ -188,10 +272,14 @@
 
       const keys = Object.create(null);
       let jumpQueued = false;
+      let regenerateRequested = false;
       window.addEventListener('keydown', (e) => {
         keys[e.code] = true;
         if (e.code === 'Space' && !e.repeat) {
           jumpQueued = true;
+        }
+        if (e.code === 'KeyR' && !e.repeat) {
+          regenerateRequested = true;
         }
       });
       window.addEventListener('keyup', (e) => {
@@ -211,11 +299,206 @@
       const AIR_CONTROL = 0.5;
       const EYE_HEIGHT = 1.6;
       const HALF_EXTENT = 24.5;
+      const PLAYER_RADIUS = 0.3;
+      const SPAWN_X = 0;
+      const SPAWN_Z = 5;
+      const SPAWN_EXCLUSION_RADIUS = 2.5;
+      const PUSH_EPS = 1e-3;
       const clock = new THREE.Clock();
 
       let velocityY = 0;
       let isGrounded = true;
       let airSpeed = WALK_SPEED;
+
+      let seed = 1;
+      let rng = mulberry32(seed);
+      const props = [];
+
+      function disposeProps() {
+        for (const prop of props) {
+          scene.remove(prop.mesh);
+          prop.mesh.geometry.dispose();
+          if (prop.mesh.material.map) prop.mesh.material.map.dispose();
+          prop.mesh.material.dispose();
+        }
+        props.length = 0;
+      }
+
+      function generate(newSeed) {
+        disposeProps();
+        seed = newSeed;
+        rng = mulberry32(seed);
+
+        const targetCount = 15 + Math.floor(rng() * 16);
+        for (let i = 0; i < targetCount; i++) {
+          let placed = false;
+          for (let attempt = 0; attempt < 30 && !placed; attempt++) {
+            const shapeIdx = Math.floor(rng() * 4);
+            const posX = -22 + rng() * 44;
+            const posZ = -22 + rng() * 44;
+
+            let geometry;
+            let posY;
+            let halfX;
+            let halfZ;
+            let topY;
+            let maxExtent;
+
+            if (shapeIdx === 0) {
+              const w = 0.6 + rng() * 1.9;
+              const h = 0.6 + rng() * 1.9;
+              const d = 0.6 + rng() * 1.9;
+              geometry = new THREE.BoxGeometry(w, h, d);
+              posY = h / 2;
+              halfX = w / 2;
+              halfZ = d / 2;
+              topY = h;
+              maxExtent = Math.max(w, h, d);
+            } else if (shapeIdx === 1) {
+              const r = 0.5 + rng() * 1.0;
+              geometry = new THREE.SphereGeometry(r, 16, 12);
+              posY = r;
+              halfX = r;
+              halfZ = r;
+              topY = 2 * r;
+              maxExtent = 2 * r;
+            } else if (shapeIdx === 2) {
+              const r = 0.4 + rng() * 0.8;
+              const h = 0.6 + rng() * 1.9;
+              geometry = new THREE.CylinderGeometry(r, r, h, 16);
+              posY = h / 2;
+              halfX = r;
+              halfZ = r;
+              topY = h;
+              maxExtent = Math.max(2 * r, h);
+            } else {
+              const r = 0.4 + rng() * 0.8;
+              const h = 0.8 + rng() * 2.2;
+              geometry = new THREE.ConeGeometry(r, h, 16);
+              posY = h / 2;
+              halfX = r;
+              halfZ = r;
+              topY = h;
+              maxExtent = Math.max(2 * r, h);
+            }
+
+            const aabb = {
+              minX: posX - halfX,
+              maxX: posX + halfX,
+              minZ: posZ - halfZ,
+              maxZ: posZ + halfZ,
+              topY,
+            };
+
+            const exMinX = aabb.minX - PLAYER_RADIUS;
+            const exMaxX = aabb.maxX + PLAYER_RADIUS;
+            const exMinZ = aabb.minZ - PLAYER_RADIUS;
+            const exMaxZ = aabb.maxZ + PLAYER_RADIUS;
+            const cx = Math.max(exMinX, Math.min(SPAWN_X, exMaxX));
+            const cz = Math.max(exMinZ, Math.min(SPAWN_Z, exMaxZ));
+            const ddx = cx - SPAWN_X;
+            const ddz = cz - SPAWN_Z;
+            if (ddx * ddx + ddz * ddz < SPAWN_EXCLUSION_RADIUS * SPAWN_EXCLUSION_RADIUS) {
+              geometry.dispose();
+              continue;
+            }
+
+            let overlaps = false;
+            for (const p of props) {
+              if (
+                aabb.minX < p.aabb.maxX &&
+                aabb.maxX > p.aabb.minX &&
+                aabb.minZ < p.aabb.maxZ &&
+                aabb.maxZ > p.aabb.minZ
+              ) {
+                overlaps = true;
+                break;
+              }
+            }
+            if (overlaps) {
+              geometry.dispose();
+              continue;
+            }
+
+            const baseTexture = baseTextures[Math.floor(rng() * 4)];
+            const tex = baseTexture.clone();
+            tex.needsUpdate = true;
+            tex.wrapS = THREE.RepeatWrapping;
+            tex.wrapT = THREE.RepeatWrapping;
+            const repeatVal = Math.max(1, Math.round(maxExtent));
+            tex.repeat.set(repeatVal, repeatVal);
+
+            const hue = rng();
+            const sat = 0.4 + rng() * 0.4;
+            const light = 0.45 + rng() * 0.25;
+            const color = new THREE.Color().setHSL(hue, sat, light);
+            const roughness = 0.4 + rng() * 0.6;
+            const metalness = rng() * 0.3;
+
+            const material = new THREE.MeshStandardMaterial({
+              map: tex,
+              color,
+              roughness,
+              metalness,
+            });
+
+            const mesh = new THREE.Mesh(geometry, material);
+            mesh.position.set(posX, posY, posZ);
+            mesh.rotation.y = rng() * Math.PI * 2;
+
+            scene.add(mesh);
+            props.push({ mesh, aabb });
+            placed = true;
+          }
+        }
+      }
+
+      function computeSupportY(x, z) {
+        let supportY = 0;
+        for (const prop of props) {
+          if (
+            x > prop.aabb.minX - PLAYER_RADIUS &&
+            x < prop.aabb.maxX + PLAYER_RADIUS &&
+            z > prop.aabb.minZ - PLAYER_RADIUS &&
+            z < prop.aabb.maxZ + PLAYER_RADIUS
+          ) {
+            if (prop.aabb.topY > supportY) supportY = prop.aabb.topY;
+          }
+        }
+        return supportY;
+      }
+
+      function pushOutAxis(axis, dir) {
+        if (dir === 0) return;
+        const feetY = camera.position.y - EYE_HEIGHT;
+        for (const prop of props) {
+          const exMinX = prop.aabb.minX - PLAYER_RADIUS;
+          const exMaxX = prop.aabb.maxX + PLAYER_RADIUS;
+          const exMinZ = prop.aabb.minZ - PLAYER_RADIUS;
+          const exMaxZ = prop.aabb.maxZ + PLAYER_RADIUS;
+          const px = camera.position.x;
+          const pz = camera.position.z;
+          if (px <= exMinX || px >= exMaxX || pz <= exMinZ || pz >= exMaxZ) continue;
+          if (feetY >= prop.aabb.topY - 0.01) continue;
+          if (axis === 'x') {
+            if (dir > 0) camera.position.x = exMinX - PUSH_EPS;
+            else camera.position.x = exMaxX + PUSH_EPS;
+          } else {
+            if (dir > 0) camera.position.z = exMinZ - PUSH_EPS;
+            else camera.position.z = exMaxZ + PUSH_EPS;
+          }
+        }
+      }
+
+      function resetPlayerToSpawn() {
+        camera.position.set(SPAWN_X, EYE_HEIGHT, SPAWN_Z);
+        velocityY = 0;
+        isGrounded = true;
+        airSpeed = WALK_SPEED;
+        jumpQueued = false;
+      }
+
+      generate(seed);
 
       function animate() {
         const delta = clock.getDelta();
@@ -240,6 +523,13 @@
 
         ambientLight.intensity = 0.15 + Math.max(0, sunDir.y) * 0.25;
 
+        if (regenerateRequested) {
+          seed = (seed + 1) | 0;
+          generate(seed);
+          resetPlayerToSpawn();
+          regenerateRequested = false;
+        }
+
         let forward = 0;
         let right = 0;
         if (controls.isLocked) {
@@ -255,38 +545,60 @@
             right /= len;
           }
 
+          let speed;
           if (isGrounded) {
             const sprinting = keys['ShiftLeft'] || keys['ShiftRight'];
-            const groundSpeed = sprinting ? WALK_SPEED * SPRINT_MULTIPLIER : WALK_SPEED;
-            if (forward !== 0) controls.moveForward(forward * groundSpeed * delta);
-            if (right !== 0) controls.moveRight(right * groundSpeed * delta);
-
-            if (jumpQueued) {
-              velocityY = JUMP_VELOCITY;
-              airSpeed = groundSpeed;
-              isGrounded = false;
-            }
+            speed = sprinting ? WALK_SPEED * SPRINT_MULTIPLIER : WALK_SPEED;
           } else {
-            const cap = airSpeed * AIR_CONTROL;
-            if (forward !== 0) controls.moveForward(forward * cap * delta);
-            if (right !== 0) controls.moveRight(right * cap * delta);
+            speed = airSpeed * AIR_CONTROL;
+          }
+
+          const oldX = camera.position.x;
+          const oldZ = camera.position.z;
+          if (forward !== 0) controls.moveForward(forward * speed * delta);
+          if (right !== 0) controls.moveRight(right * speed * delta);
+          const dx = camera.position.x - oldX;
+          const dz = camera.position.z - oldZ;
+
+          camera.position.x = oldX + dx;
+          camera.position.z = oldZ;
+          pushOutAxis('x', Math.sign(dx));
+          camera.position.x = Math.max(-HALF_EXTENT, Math.min(HALF_EXTENT, camera.position.x));
+
+          camera.position.z = oldZ + dz;
+          pushOutAxis('z', Math.sign(dz));
+          camera.position.z = Math.max(-HALF_EXTENT, Math.min(HALF_EXTENT, camera.position.z));
+
+          if (isGrounded && jumpQueued) {
+            const groundSpeed = (keys['ShiftLeft'] || keys['ShiftRight'])
+              ? WALK_SPEED * SPRINT_MULTIPLIER
+              : WALK_SPEED;
+            velocityY = JUMP_VELOCITY;
+            airSpeed = groundSpeed;
+            isGrounded = false;
           }
         }
 
         jumpQueued = false;
 
+        const supportY = computeSupportY(camera.position.x, camera.position.z);
+        const feetY = camera.position.y - EYE_HEIGHT;
+
+        if (isGrounded && supportY < feetY - 1e-4) {
+          isGrounded = false;
+          velocityY = 0;
+        }
+
         if (!isGrounded) {
           velocityY -= GRAVITY * delta;
           camera.position.y += velocityY * delta;
-          if (camera.position.y <= EYE_HEIGHT) {
-            camera.position.y = EYE_HEIGHT;
-            velocityY = 0;
-            isGrounded = true;
-          }
         }
 
-        camera.position.x = Math.max(-HALF_EXTENT, Math.min(HALF_EXTENT, camera.position.x));
-        camera.position.z = Math.max(-HALF_EXTENT, Math.min(HALF_EXTENT, camera.position.z));
+        if (camera.position.y - EYE_HEIGHT <= supportY) {
+          camera.position.y = supportY + EYE_HEIGHT;
+          velocityY = 0;
+          isGrounded = true;
+        }
 
         renderer.render(scene, camera);
         requestAnimationFrame(animate);
