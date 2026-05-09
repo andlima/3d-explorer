@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>3d-explorer — spinning cube</title>
+    <title>3d-explorer — first-person walk</title>
     <style>
       html,
       body {
@@ -14,22 +14,33 @@
       canvas {
         display: block;
       }
-      #controls-panel {
+      #lock-overlay {
         position: fixed;
-        top: 12px;
-        right: 12px;
-        padding: 8px 12px;
-        background: rgba(0, 0, 0, 0.55);
-        color: #f5f5f5;
-        font: 14px/1.2 system-ui, sans-serif;
-        border-radius: 6px;
-        user-select: none;
-      }
-      #controls-panel label {
+        inset: 0;
         display: flex;
+        flex-direction: column;
         align-items: center;
-        gap: 6px;
+        justify-content: center;
+        gap: 8px;
+        background: rgba(0, 0, 0, 0.6);
+        color: #f5f5f5;
+        font: 16px/1.4 system-ui, sans-serif;
+        text-align: center;
         cursor: pointer;
+        user-select: none;
+        z-index: 10;
+      }
+      #lock-overlay h1 {
+        margin: 0;
+        font-size: 22px;
+        font-weight: 600;
+      }
+      #lock-overlay p {
+        margin: 0;
+        opacity: 0.85;
+      }
+      #lock-overlay.hidden {
+        display: none;
       }
     </style>
     <script type="importmap">
@@ -42,15 +53,13 @@
     </script>
   </head>
   <body>
-    <div id="controls-panel">
-      <label>
-        <input type="checkbox" id="auto-rotate-toggle" checked />
-        Auto-rotate cube
-      </label>
+    <div id="lock-overlay">
+      <h1>Click to play</h1>
+      <p>WASD or arrow keys to move &middot; mouse to look &middot; ESC to release</p>
     </div>
     <script type="module">
       import * as THREE from 'three';
-      import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+      import { PointerLockControls } from 'three/addons/controls/PointerLockControls.js';
 
       const scene = new THREE.Scene();
       scene.background = new THREE.Color(0x111111);
@@ -61,21 +70,30 @@
         0.1,
         100,
       );
-      camera.position.set(2, 2, 3);
-      camera.lookAt(0, 0, 0);
+      camera.position.set(0, 1.6, 5);
+      camera.lookAt(0, 1.6, 0);
 
       const renderer = new THREE.WebGLRenderer({ antialias: true });
       renderer.setPixelRatio(window.devicePixelRatio);
       renderer.setSize(window.innerWidth, window.innerHeight);
       document.body.appendChild(renderer.domElement);
 
-      const controls = new OrbitControls(camera, renderer.domElement);
-      controls.enableDamping = true;
+      const ground = new THREE.Mesh(
+        new THREE.PlaneGeometry(50, 50),
+        new THREE.MeshStandardMaterial({ color: 0x202428, roughness: 0.9, metalness: 0.0 }),
+      );
+      ground.rotation.x = -Math.PI / 2;
+      scene.add(ground);
+
+      const grid = new THREE.GridHelper(50, 50, 0x666666, 0x444444);
+      grid.position.y = 0.01;
+      scene.add(grid);
 
       const cube = new THREE.Mesh(
         new THREE.BoxGeometry(1, 1, 1),
         new THREE.MeshStandardMaterial({ color: 0x4f9eff, roughness: 0.4, metalness: 0.1 }),
       );
+      cube.position.set(0, 0.5, 0);
       scene.add(cube);
 
       scene.add(new THREE.AmbientLight(0xffffff, 0.3));
@@ -83,10 +101,24 @@
       sun.position.set(3, 4, 2);
       scene.add(sun);
 
-      const autoRotateToggle = document.getElementById('auto-rotate-toggle');
-      let autoRotate = autoRotateToggle.checked;
-      autoRotateToggle.addEventListener('change', () => {
-        autoRotate = autoRotateToggle.checked;
+      const controls = new PointerLockControls(camera, document.body);
+      const overlay = document.getElementById('lock-overlay');
+      overlay.addEventListener('click', () => {
+        controls.lock();
+      });
+      controls.addEventListener('lock', () => {
+        overlay.classList.add('hidden');
+      });
+      controls.addEventListener('unlock', () => {
+        overlay.classList.remove('hidden');
+      });
+
+      const keys = Object.create(null);
+      window.addEventListener('keydown', (e) => {
+        keys[e.code] = true;
+      });
+      window.addEventListener('keyup', (e) => {
+        keys[e.code] = false;
       });
 
       window.addEventListener('resize', () => {
@@ -95,12 +127,35 @@
         renderer.setSize(window.innerWidth, window.innerHeight);
       });
 
+      const SPEED = 5;
+      const HALF_EXTENT = 24.5;
+      const clock = new THREE.Clock();
+
       function animate() {
-        if (autoRotate) {
-          cube.rotation.x += 0.01;
-          cube.rotation.y += 0.013;
+        const delta = clock.getDelta();
+
+        if (controls.isLocked) {
+          let forward = 0;
+          let right = 0;
+          if (keys['KeyW'] || keys['ArrowUp']) forward += 1;
+          if (keys['KeyS'] || keys['ArrowDown']) forward -= 1;
+          if (keys['KeyD'] || keys['ArrowRight']) right += 1;
+          if (keys['KeyA'] || keys['ArrowLeft']) right -= 1;
+
+          const lenSq = forward * forward + right * right;
+          if (lenSq > 1) {
+            const len = Math.sqrt(lenSq);
+            forward /= len;
+            right /= len;
+          }
+
+          if (forward !== 0) controls.moveForward(forward * SPEED * delta);
+          if (right !== 0) controls.moveRight(right * SPEED * delta);
+
+          camera.position.x = Math.max(-HALF_EXTENT, Math.min(HALF_EXTENT, camera.position.x));
+          camera.position.z = Math.max(-HALF_EXTENT, Math.min(HALF_EXTENT, camera.position.z));
         }
-        controls.update();
+
         renderer.render(scene, camera);
         requestAnimationFrame(animate);
       }
