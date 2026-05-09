@@ -55,7 +55,7 @@
   <body>
     <div id="lock-overlay">
       <h1>Click to play</h1>
-      <p>WASD or arrow keys to move &middot; mouse to look &middot; ESC to release</p>
+      <p>WASD / arrows to move &middot; Shift to sprint &middot; Space to jump &middot; mouse to look &middot; ESC to release</p>
     </div>
     <script type="module">
       import * as THREE from 'three';
@@ -114,8 +114,12 @@
       });
 
       const keys = Object.create(null);
+      let jumpQueued = false;
       window.addEventListener('keydown', (e) => {
         keys[e.code] = true;
+        if (e.code === 'Space' && !e.repeat) {
+          jumpQueued = true;
+        }
       });
       window.addEventListener('keyup', (e) => {
         keys[e.code] = false;
@@ -127,16 +131,25 @@
         renderer.setSize(window.innerWidth, window.innerHeight);
       });
 
-      const SPEED = 5;
+      const WALK_SPEED = 5;
+      const SPRINT_MULTIPLIER = 2;
+      const JUMP_VELOCITY = 7.5;
+      const GRAVITY = 25;
+      const AIR_CONTROL = 0.5;
+      const EYE_HEIGHT = 1.6;
       const HALF_EXTENT = 24.5;
       const clock = new THREE.Clock();
+
+      let velocityY = 0;
+      let isGrounded = true;
+      let airSpeed = WALK_SPEED;
 
       function animate() {
         const delta = clock.getDelta();
 
+        let forward = 0;
+        let right = 0;
         if (controls.isLocked) {
-          let forward = 0;
-          let right = 0;
           if (keys['KeyW'] || keys['ArrowUp']) forward += 1;
           if (keys['KeyS'] || keys['ArrowDown']) forward -= 1;
           if (keys['KeyD'] || keys['ArrowRight']) right += 1;
@@ -149,12 +162,38 @@
             right /= len;
           }
 
-          if (forward !== 0) controls.moveForward(forward * SPEED * delta);
-          if (right !== 0) controls.moveRight(right * SPEED * delta);
+          if (isGrounded) {
+            const sprinting = keys['ShiftLeft'] || keys['ShiftRight'];
+            const groundSpeed = sprinting ? WALK_SPEED * SPRINT_MULTIPLIER : WALK_SPEED;
+            if (forward !== 0) controls.moveForward(forward * groundSpeed * delta);
+            if (right !== 0) controls.moveRight(right * groundSpeed * delta);
 
-          camera.position.x = Math.max(-HALF_EXTENT, Math.min(HALF_EXTENT, camera.position.x));
-          camera.position.z = Math.max(-HALF_EXTENT, Math.min(HALF_EXTENT, camera.position.z));
+            if (jumpQueued) {
+              velocityY = JUMP_VELOCITY;
+              airSpeed = groundSpeed;
+              isGrounded = false;
+            }
+          } else {
+            const cap = airSpeed * AIR_CONTROL;
+            if (forward !== 0) controls.moveForward(forward * cap * delta);
+            if (right !== 0) controls.moveRight(right * cap * delta);
+          }
         }
+
+        jumpQueued = false;
+
+        if (!isGrounded) {
+          velocityY -= GRAVITY * delta;
+          camera.position.y += velocityY * delta;
+          if (camera.position.y <= EYE_HEIGHT) {
+            camera.position.y = EYE_HEIGHT;
+            velocityY = 0;
+            isGrounded = true;
+          }
+        }
+
+        camera.position.x = Math.max(-HALF_EXTENT, Math.min(HALF_EXTENT, camera.position.x));
+        camera.position.z = Math.max(-HALF_EXTENT, Math.min(HALF_EXTENT, camera.position.z));
 
         renderer.render(scene, camera);
         requestAnimationFrame(animate);
