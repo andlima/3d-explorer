@@ -146,6 +146,7 @@
       const renderer = new THREE.WebGLRenderer({ antialias: true });
       renderer.setPixelRatio(window.devicePixelRatio);
       renderer.setSize(window.innerWidth, window.innerHeight);
+      const MAX_ANISO = renderer.capabilities.getMaxAnisotropy();
       document.body.appendChild(renderer.domElement);
 
       const ground = new THREE.Mesh(
@@ -331,38 +332,44 @@
         const cell = size / cells;
         const canvas = makeCanvas(size);
         const ctx = canvas.getContext('2d');
+        ctx.filter = 'blur(1.0px)';
         for (let y = 0; y < cells; y++) {
           for (let x = 0; x < cells; x++) {
-            ctx.fillStyle = (x + y) % 2 === 0 ? '#FFFFFF' : '#202020';
+            ctx.fillStyle = (x + y) % 2 === 0 ? '#B0B0B0' : '#5C5C5C';
             ctx.fillRect(x * cell, y * cell, cell, cell);
           }
         }
-        return new THREE.CanvasTexture(canvas);
+        ctx.filter = 'none';
+        const tex = new THREE.CanvasTexture(canvas);
+        tex.anisotropy = MAX_ANISO;
+        return tex;
       }
 
       function createStripesTexture() {
         const size = 256;
-        const stripes = 8;
-        const stripe = size / stripes;
         const canvas = makeCanvas(size);
         const ctx = canvas.getContext('2d');
-        for (let i = 0; i < stripes; i++) {
-          ctx.fillStyle = i % 2 === 0 ? '#FFFFFF' : '#404040';
-          ctx.fillRect(i * stripe, 0, stripe, size);
+        for (let x = 0; x < size; x++) {
+          const v = 0.62 + 0.22 * Math.sin((x / size) * Math.PI * 8);
+          const g = Math.round(v * 255);
+          ctx.fillStyle = `rgb(${g}, ${g}, ${g})`;
+          ctx.fillRect(x, 0, 1, size);
         }
-        return new THREE.CanvasTexture(canvas);
+        const tex = new THREE.CanvasTexture(canvas);
+        tex.anisotropy = MAX_ANISO;
+        return tex;
       }
 
       function createDotsTexture() {
         const size = 256;
         const cells = 6;
         const cell = size / cells;
-        const radius = 12;
+        const radius = 11;
         const canvas = makeCanvas(size);
         const ctx = canvas.getContext('2d');
-        ctx.fillStyle = '#F2F2F2';
+        ctx.fillStyle = '#C0C0C0';
         ctx.fillRect(0, 0, size, size);
-        ctx.fillStyle = '#1A1A1A';
+        ctx.fillStyle = '#5A5A5A';
         for (let y = 0; y < cells; y++) {
           for (let x = 0; x < cells; x++) {
             const cx = x * cell + cell / 2;
@@ -372,24 +379,32 @@
             ctx.fill();
           }
         }
-        return new THREE.CanvasTexture(canvas);
+        const tex = new THREE.CanvasTexture(canvas);
+        tex.anisotropy = MAX_ANISO;
+        return tex;
       }
 
       function createNoiseTexture() {
         const size = 256;
-        const canvas = makeCanvas(size);
-        const ctx = canvas.getContext('2d');
-        const img = ctx.createImageData(size, size);
+        const small = makeCanvas(16);
+        const smallCtx = small.getContext('2d');
+        const img = smallCtx.createImageData(16, 16);
         const data = img.data;
-        for (let i = 0; i < size * size; i++) {
-          const v = Math.floor(Math.random() * 256);
+        for (let i = 0; i < 16 * 16; i++) {
+          const r = Math.random();
+          const v = Math.round((0.45 + r * 0.40) * 255);
           data[i * 4 + 0] = v;
           data[i * 4 + 1] = v;
           data[i * 4 + 2] = v;
           data[i * 4 + 3] = 255;
         }
-        ctx.putImageData(img, 0, 0);
-        return new THREE.CanvasTexture(canvas);
+        smallCtx.putImageData(img, 0, 0);
+        const canvas = makeCanvas(size);
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(small, 0, 0, size, size);
+        const tex = new THREE.CanvasTexture(canvas);
+        tex.anisotropy = MAX_ANISO;
+        return tex;
       }
 
       const baseTextures = [
