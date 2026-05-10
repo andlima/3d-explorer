@@ -149,16 +149,13 @@
       const MAX_ANISO = renderer.capabilities.getMaxAnisotropy();
       document.body.appendChild(renderer.domElement);
 
-      const ground = new THREE.Mesh(
-        new THREE.PlaneGeometry(50, 50),
-        new THREE.MeshStandardMaterial({ color: 0x202428, roughness: 0.9, metalness: 0.0 }),
-      );
-      ground.rotation.x = -Math.PI / 2;
-      scene.add(ground);
-
-      const grid = new THREE.GridHelper(50, 50, 0x666666, 0x444444);
-      grid.position.y = 0.01;
-      scene.add(grid);
+      const terrainMaterial = new THREE.MeshStandardMaterial({
+        color: 0x202428,
+        roughness: 0.9,
+        metalness: 0.0,
+      });
+      const terrainMesh = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), terrainMaterial);
+      scene.add(terrainMesh);
 
       const ambientLight = new THREE.AmbientLight(0xffffff, 0.3);
       scene.add(ambientLight);
@@ -526,6 +523,12 @@
       const SPAWN_Z = 5;
       const SPAWN_EXCLUSION_RADIUS = 2.5;
       const PUSH_EPS = 1e-3;
+      const STEP_DOWN_TOLERANCE = 0.2;
+      const TERRAIN_AMPLITUDE = 0.6;
+      const TERRAIN_GRID = 16;
+      const TERRAIN_SEGMENTS = 100;
+      const SPAWN_FLAT_RADIUS = 3.5;
+      const SPAWN_FALLOFF_RADIUS = 7.0;
       const clock = new THREE.Clock();
 
       let velocityY = 0;
@@ -546,6 +549,58 @@
         props.length = 0;
       }
 
+      const heightGrid = new Float32Array(TERRAIN_GRID * TERRAIN_GRID);
+
+      function heightAt(x, z) {
+        const gx = THREE.MathUtils.clamp(
+          ((x + 25) / 50) * (TERRAIN_GRID - 1),
+          0,
+          TERRAIN_GRID - 1,
+        );
+        const gz = THREE.MathUtils.clamp(
+          ((z + 25) / 50) * (TERRAIN_GRID - 1),
+          0,
+          TERRAIN_GRID - 1,
+        );
+        const x0 = Math.floor(gx);
+        const z0 = Math.floor(gz);
+        const x1 = Math.min(x0 + 1, TERRAIN_GRID - 1);
+        const z1 = Math.min(z0 + 1, TERRAIN_GRID - 1);
+        const fx = gx - x0;
+        const fz = gz - z0;
+        const fxs = fx * fx * (3 - 2 * fx);
+        const fzs = fz * fz * (3 - 2 * fz);
+        const v00 = heightGrid[z0 * TERRAIN_GRID + x0];
+        const v10 = heightGrid[z0 * TERRAIN_GRID + x1];
+        const v01 = heightGrid[z1 * TERRAIN_GRID + x0];
+        const v11 = heightGrid[z1 * TERRAIN_GRID + x1];
+        const v0 = v00 * (1 - fxs) + v10 * fxs;
+        const v1 = v01 * (1 - fxs) + v11 * fxs;
+        const raw = v0 * (1 - fzs) + v1 * fzs;
+        const dx = x - SPAWN_X;
+        const dz = z - SPAWN_Z;
+        const dist = Math.sqrt(dx * dx + dz * dz);
+        const mask = THREE.MathUtils.smoothstep(dist, SPAWN_FLAT_RADIUS, SPAWN_FALLOFF_RADIUS);
+        return raw * TERRAIN_AMPLITUDE * mask;
+      }
+
+      function buildTerrainGeometry(seedVal) {
+        const terrainRng = mulberry32(seedVal ^ 0xa11ce);
+        for (let i = 0; i < TERRAIN_GRID * TERRAIN_GRID; i++) {
+          heightGrid[i] = terrainRng() * 2 - 1;
+        }
+        const geometry = new THREE.PlaneGeometry(50, 50, TERRAIN_SEGMENTS, TERRAIN_SEGMENTS);
+        geometry.rotateX(-Math.PI / 2);
+        const positions = geometry.attributes.position;
+        for (let i = 0; i < positions.count; i++) {
+          const vx = positions.getX(i);
+          const vz = positions.getZ(i);
+          positions.setY(i, heightAt(vx, vz));
+        }
+        geometry.computeVertexNormals();
+        return geometry;
+      }
+
       function generate(newSeed) {
         disposeProps();
         seed = newSeed;
@@ -558,6 +613,7 @@
             const shapeIdx = Math.floor(rng() * 4);
             const posX = -22 + rng() * 44;
             const posZ = -22 + rng() * 44;
+            const baseY = heightAt(posX, posZ);
 
             let geometry;
             let posY;
@@ -619,7 +675,7 @@
               maxX: posX + halfX,
               minZ: posZ - halfZ,
               maxZ: posZ + halfZ,
-              topY,
+              topY: baseY + topY,
             };
 
             const exMinX = aabb.minX - PLAYER_RADIUS;
@@ -678,7 +734,7 @@
             material.emissiveIntensity = 0;
 
             const mesh = new THREE.Mesh(geometry, material);
-            mesh.position.set(posX, posY, posZ);
+            mesh.position.set(posX, baseY + posY, posZ);
             mesh.rotation.y = rng() * Math.PI * 2;
 
             const info = {
@@ -698,7 +754,7 @@
       }
 
       function computeSupportY(x, z) {
-        let supportY = 0;
+        let supportY = heightAt(x, z);
         for (const prop of props) {
           if (
             x > prop.aabb.minX - PLAYER_RADIUS &&
@@ -735,13 +791,15 @@
       }
 
       function resetPlayerToSpawn() {
-        camera.position.set(SPAWN_X, EYE_HEIGHT, SPAWN_Z);
+        camera.position.set(SPAWN_X, heightAt(SPAWN_X, SPAWN_Z) + EYE_HEIGHT, SPAWN_Z);
         velocityY = 0;
         isGrounded = true;
         airSpeed = WALK_SPEED;
         jumpQueued = false;
       }
 
+      terrainMesh.geometry.dispose();
+      terrainMesh.geometry = buildTerrainGeometry(seed);
       generate(seed);
 
       function animate() {
@@ -775,6 +833,8 @@
 
         if (regenerateRequested) {
           seed = (seed + 1) | 0;
+          terrainMesh.geometry.dispose();
+          terrainMesh.geometry = buildTerrainGeometry(seed);
           generate(seed);
           resetPlayerToSpawn();
           regenerateRequested = false;
@@ -848,7 +908,7 @@
         const supportY = computeSupportY(camera.position.x, camera.position.z);
         const feetY = camera.position.y - EYE_HEIGHT;
 
-        if (isGrounded && supportY < feetY - 1e-4) {
+        if (isGrounded && supportY < feetY - STEP_DOWN_TOLERANCE) {
           isGrounded = false;
           velocityY = 0;
         }
