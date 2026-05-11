@@ -42,38 +42,136 @@
       #lock-overlay.hidden {
         display: none;
       }
-      #crosshair {
+      #viewfinder {
         position: fixed;
-        top: 50%;
-        left: 50%;
-        width: 14px;
-        height: 14px;
-        transform: translate(-50%, -50%);
+        inset: 0;
         pointer-events: none;
         user-select: none;
         display: none;
-        z-index: 5;
+        z-index: 4;
       }
-      #crosshair::before,
-      #crosshair::after {
+      #vf-vignette {
+        position: absolute;
+        inset: 0;
+        background: radial-gradient(
+          ellipse at center,
+          rgba(0, 0, 0, 0) 35%,
+          rgba(0, 0, 0, 0.28) 75%,
+          rgba(0, 0, 0, 0.6) 100%
+        );
+      }
+      .vf-bracket {
+        position: absolute;
+        width: 32px;
+        height: 32px;
+        filter: drop-shadow(0 0 1px rgba(0, 0, 0, 0.6));
+      }
+      .vf-bracket-tl {
+        top: 8%;
+        left: 8%;
+        border-top: 2px solid rgba(255, 255, 255, 0.85);
+        border-left: 2px solid rgba(255, 255, 255, 0.85);
+      }
+      .vf-bracket-tr {
+        top: 8%;
+        right: 8%;
+        border-top: 2px solid rgba(255, 255, 255, 0.85);
+        border-right: 2px solid rgba(255, 255, 255, 0.85);
+      }
+      .vf-bracket-bl {
+        bottom: 8%;
+        left: 8%;
+        border-bottom: 2px solid rgba(255, 255, 255, 0.85);
+        border-left: 2px solid rgba(255, 255, 255, 0.85);
+      }
+      .vf-bracket-br {
+        bottom: 8%;
+        right: 8%;
+        border-bottom: 2px solid rgba(255, 255, 255, 0.85);
+        border-right: 2px solid rgba(255, 255, 255, 0.85);
+      }
+      #vf-reticle {
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        width: 20px;
+        height: 20px;
+        margin: -10px 0 0 -10px;
+        border: 1.5px solid rgba(255, 255, 255, 0.9);
+        border-radius: 50%;
+        box-sizing: border-box;
+        box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.45);
+      }
+      #vf-reticle::before,
+      #vf-reticle::after {
         content: '';
         position: absolute;
-        background: #fff;
-        box-shadow: 0 0 0 1px #000;
+        background: rgba(255, 255, 255, 0.9);
+        box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.45);
       }
-      #crosshair::before {
+      #vf-reticle::before {
         top: 50%;
-        left: 0;
-        width: 100%;
+        left: 3px;
+        right: 3px;
         height: 2px;
         margin-top: -1px;
       }
-      #crosshair::after {
-        top: 0;
+      #vf-reticle::after {
         left: 50%;
+        top: 3px;
+        bottom: 3px;
         width: 2px;
-        height: 100%;
         margin-left: -1px;
+      }
+      #viewfinder.locked #vf-reticle {
+        border-color: #6cff66;
+        box-shadow: 0 0 8px rgba(108, 255, 102, 0.6), 0 0 0 1px rgba(0, 0, 0, 0.45);
+      }
+      #viewfinder.locked #vf-reticle::before,
+      #viewfinder.locked #vf-reticle::after {
+        background: #6cff66;
+      }
+      #vf-lock-label {
+        position: absolute;
+        top: calc(50% + 18px);
+        left: 50%;
+        transform: translateX(-50%);
+        font: bold 11px/1 ui-monospace, monospace;
+        color: #6cff66;
+        letter-spacing: 2px;
+        text-shadow: 0 0 4px rgba(0, 0, 0, 0.8);
+        display: none;
+      }
+      #viewfinder.locked #vf-lock-label {
+        display: block;
+      }
+      #vf-focal {
+        position: absolute;
+        bottom: 8px;
+        left: 8px;
+        padding: 4px 8px;
+        font: 12px/1 ui-monospace, monospace;
+        color: #fff;
+        background: rgba(0, 0, 0, 0.55);
+        border-radius: 3px;
+      }
+      #vf-failure-toast {
+        position: fixed;
+        top: calc(50% + 56px);
+        left: 50%;
+        transform: translateX(-50%);
+        padding: 6px 12px;
+        font: 12px/1.2 ui-monospace, monospace;
+        color: #ffe;
+        background: rgba(70, 0, 0, 0.78);
+        border: 1px solid rgba(255, 80, 80, 0.65);
+        border-radius: 4px;
+        letter-spacing: 1px;
+        white-space: nowrap;
+        pointer-events: none;
+        user-select: none;
+        display: none;
+        z-index: 6;
       }
       #cam-indicator {
         position: fixed;
@@ -135,10 +233,11 @@
         display: none;
         z-index: 5;
       }
-      #crosshair.visible,
+      #viewfinder.visible,
       #cam-indicator.visible,
       #info-card.visible,
-      #target-toast.visible {
+      #target-toast.visible,
+      #vf-failure-toast.visible {
         display: block;
       }
     </style>
@@ -156,11 +255,21 @@
       <h1>Click to play</h1>
       <p>WASD / arrows to move &middot; Shift to sprint &middot; Space to jump &middot; R to randomize &middot; C to toggle camera &middot; mouse to look &middot; ESC to release</p>
     </div>
-    <div id="crosshair"></div>
+    <div id="viewfinder">
+      <div id="vf-vignette"></div>
+      <div class="vf-bracket vf-bracket-tl"></div>
+      <div class="vf-bracket vf-bracket-tr"></div>
+      <div class="vf-bracket vf-bracket-bl"></div>
+      <div class="vf-bracket vf-bracket-br"></div>
+      <div id="vf-reticle"></div>
+      <div id="vf-lock-label">LOCK</div>
+      <div id="vf-focal">21mm</div>
+    </div>
     <div id="cam-indicator">CAM ON</div>
     <div id="info-card"></div>
     <div id="catalog-counter">Captured 0 / 0</div>
     <div id="target-toast"></div>
+    <div id="vf-failure-toast"></div>
     <script type="module">
       import * as THREE from 'three';
       import { PointerLockControls } from 'three/addons/controls/PointerLockControls.js';
@@ -450,15 +559,23 @@
       const MAX_FOV = 60;
       const HIGHLIGHT_DURATION = 0.6;
       const INFO_DURATION = 2.5;
+      const CAPTURE_MIN_FRAME_FRACTION = 0.16;
+      const FAILURE_TOAST_DURATION = 1.5;
+      const VIEWFINDER_SENSOR_HEIGHT_MM = 24;
+      const FAILURE_TOAST_MESSAGE = 'OUT OF FRAME — ZOOM IN OR GET CLOSER';
 
       let cameraMode = false;
       let targetFov = DEFAULT_FOV;
       let infoTimer = 0;
+      let failureToastTimer = 0;
+      let lastFocalMm = -1;
 
       const aimNdc = new THREE.Vector2(0, 0);
       const raycaster = new THREE.Raycaster();
 
-      const crosshairEl = document.getElementById('crosshair');
+      const viewfinderEl = document.getElementById('viewfinder');
+      const vfFocalEl = document.getElementById('vf-focal');
+      const failureToastEl = document.getElementById('vf-failure-toast');
       const camIndicatorEl = document.getElementById('cam-indicator');
       const infoCardEl = document.getElementById('info-card');
       const catalogCounterEl = document.getElementById('catalog-counter');
@@ -495,6 +612,25 @@
         targetToastTimer = 0;
       }
 
+      function isTargetFramed(target) {
+        const distance = camera.position.distanceTo(target.mesh.position);
+        const angularRadius = Math.atan2(TARGET_RADIUS, distance);
+        const halfVFov = (camera.fov * Math.PI / 180) / 2;
+        const frameFraction = angularRadius / halfVFov;
+        return frameFraction >= CAPTURE_MIN_FRAME_FRACTION;
+      }
+
+      function showFailureToast() {
+        failureToastEl.textContent = FAILURE_TOAST_MESSAGE;
+        failureToastEl.classList.add('visible');
+        failureToastTimer = FAILURE_TOAST_DURATION;
+      }
+
+      function hideFailureToast() {
+        failureToastEl.classList.remove('visible');
+        failureToastTimer = 0;
+      }
+
       const controls = new PointerLockControls(camera, document.body);
       const overlay = document.getElementById('lock-overlay');
       overlay.addEventListener('click', () => {
@@ -519,12 +655,17 @@
           regenerateRequested = true;
           hideInfoCard();
           hideTargetToast();
+          hideFailureToast();
         }
         if (e.code === 'KeyC' && !e.repeat) {
           cameraMode = !cameraMode;
-          crosshairEl.classList.toggle('visible', cameraMode);
+          viewfinderEl.classList.toggle('visible', cameraMode);
           camIndicatorEl.classList.toggle('visible', cameraMode);
-          if (!cameraMode) targetFov = DEFAULT_FOV;
+          if (!cameraMode) {
+            targetFov = DEFAULT_FOV;
+            viewfinderEl.classList.remove('locked');
+            hideFailureToast();
+          }
         }
       });
 
@@ -550,7 +691,12 @@
         const hitMesh = hits[0].object;
         const hitTarget = targets.find((t) => t.mesh === hitMesh);
         if (hitTarget) {
-          if (!hitTarget.captured) captureTarget(hitTarget);
+          if (hitTarget.captured) return;
+          if (isTargetFramed(hitTarget)) {
+            captureTarget(hitTarget);
+          } else {
+            showFailureToast();
+          }
           return;
         }
         const hitProp = props.find((p) => p.mesh === hitMesh);
@@ -1320,6 +1466,30 @@
         camera.fov += (targetFov - camera.fov) * Math.min(1, delta * 8);
         camera.updateProjectionMatrix();
 
+        const focalMm = Math.round(
+          VIEWFINDER_SENSOR_HEIGHT_MM /
+            (2 * Math.tan((camera.fov * Math.PI / 180) / 2)),
+        );
+        if (focalMm !== lastFocalMm) {
+          lastFocalMm = focalMm;
+          vfFocalEl.textContent = `${focalMm}mm`;
+        }
+
+        let focusLocked = false;
+        if (cameraMode) {
+          raycaster.setFromCamera(aimNdc, camera);
+          const hittables = props.map((p) => p.mesh).concat(targets.map((t) => t.mesh));
+          const hits = raycaster.intersectObjects(hittables);
+          if (hits.length > 0) {
+            const hitMesh = hits[0].object;
+            const hitTarget = targets.find((t) => t.mesh === hitMesh);
+            if (hitTarget && !hitTarget.captured && isTargetFramed(hitTarget)) {
+              focusLocked = true;
+            }
+          }
+        }
+        viewfinderEl.classList.toggle('locked', focusLocked);
+
         for (const prop of props) {
           prop.highlightT = Math.max(0, prop.highlightT - delta);
           prop.mesh.material.emissiveIntensity =
@@ -1342,6 +1512,11 @@
         if (targetToastTimer > 0) {
           targetToastTimer -= delta;
           if (targetToastTimer <= 0) hideTargetToast();
+        }
+
+        if (failureToastTimer > 0) {
+          failureToastTimer -= delta;
+          if (failureToastTimer <= 0) hideFailureToast();
         }
 
         let forward = 0;
