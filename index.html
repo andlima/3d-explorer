@@ -202,14 +202,14 @@
 
       const sunDisc = new THREE.Mesh(
         new THREE.SphereGeometry(1.5, 24, 16),
-        new THREE.MeshBasicMaterial({ color: 0xffe9a8, depthWrite: false }),
+        new THREE.MeshBasicMaterial({ color: 0xffe9a8, depthWrite: false, fog: false }),
       );
       sunDisc.renderOrder = -1;
       scene.add(sunDisc);
 
       const moonDisc = new THREE.Mesh(
         new THREE.SphereGeometry(1.5, 24, 16),
-        new THREE.MeshBasicMaterial({ color: 0xddddee, depthWrite: false }),
+        new THREE.MeshBasicMaterial({ color: 0xddddee, depthWrite: false, fog: false }),
       );
       moonDisc.renderOrder = -1;
       scene.add(moonDisc);
@@ -529,6 +529,13 @@
       const TERRAIN_SEGMENTS = 100;
       const SPAWN_FLAT_RADIUS = 3.5;
       const SPAWN_FALLOFF_RADIUS = 7.0;
+      const FOG_NIGHT_NEAR = 6;
+      const FOG_NIGHT_FAR = 30;
+      const FOG_NOON_NEAR = 40;
+      const FOG_NOON_FAR = 150;
+      const FOG_NIGHT_THRESHOLD = -0.25;
+      const FOG_DAY_THRESHOLD = 0.3;
+      scene.fog = new THREE.Fog(0x000000, FOG_NIGHT_NEAR, FOG_NIGHT_FAR);
       const clock = new THREE.Clock();
 
       let velocityY = 0;
@@ -810,6 +817,11 @@
         sunDir.set(Math.cos(theta), Math.sin(theta), 0);
 
         updateSkyColors(t);
+
+        scene.fog.color.copy(skyHorizonColor);
+        const fogT = THREE.MathUtils.smoothstep(sunDir.y, FOG_NIGHT_THRESHOLD, FOG_DAY_THRESHOLD);
+        scene.fog.near = THREE.MathUtils.lerp(FOG_NIGHT_NEAR, FOG_NOON_NEAR, fogT);
+        scene.fog.far = THREE.MathUtils.lerp(FOG_NIGHT_FAR, FOG_NOON_FAR, fogT);
 
         skyDome.position.copy(camera.position);
         sunDisc.position.copy(camera.position).addScaledVector(sunDir, SUN_DISTANCE);
