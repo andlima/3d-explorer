@@ -545,6 +545,27 @@
       const POND_WAVE_AMPLITUDE = 0.03;
       const POND_BASE_COLOR = new THREE.Color('#2A5F8F');
       const POND_OPACITY = 0.75;
+      const TREE_COUNT_MIN = 18;
+      const TREE_COUNT_RANGE = 15;
+      const TREE_TRUNK_RADIUS_MIN = 0.12;
+      const TREE_TRUNK_RADIUS_RANGE = 0.12;
+      const TREE_TRUNK_HEIGHT_MIN = 0.6;
+      const TREE_TRUNK_HEIGHT_RANGE = 1.0;
+      const TREE_FOLIAGE_RADIUS_MIN = 0.9;
+      const TREE_FOLIAGE_RADIUS_RANGE = 0.7;
+      const TREE_FOLIAGE_HEIGHT_MIN = 2.0;
+      const TREE_FOLIAGE_HEIGHT_RANGE = 2.0;
+      const TREE_SPAWN_EXCLUSION = 4.0;
+      const TREE_POND_KEEPOUT = 6.5;
+      const TREE_PROP_BUFFER = 0.4;
+      const TREE_TREE_BUFFER = 0.4;
+      const TREE_PLACEMENT_HALF = 22.0;
+      const TREE_RADIAL_SEGMENTS = 8;
+      const TREE_TRUNK_COLOR = new THREE.Color('#5C3A1E');
+      const TREE_FOLIAGE_BASE_COLOR = new THREE.Color('#2F6B3A');
+      const TREE_FOLIAGE_HUE_VARIANCE = 0.025;
+      const TREE_FOLIAGE_LIGHT_VARIANCE = 0.05;
+      const TREE_PLACEMENT_ATTEMPTS = 30;
       scene.fog = new THREE.Fog(0x000000, FOG_NIGHT_NEAR, FOG_NIGHT_FAR);
       const clock = new THREE.Clock();
 
@@ -555,6 +576,7 @@
       let seed = 1;
       let rng = mulberry32(seed);
       const props = [];
+      const trees = [];
       let pondCenterX = 0;
       let pondCenterZ = 0;
       let pondMesh = null;
@@ -606,6 +628,12 @@
         depthWrite: false,
       });
 
+      const trunkMaterial = new THREE.MeshStandardMaterial({
+        color: TREE_TRUNK_COLOR,
+        roughness: 0.9,
+        metalness: 0.0,
+      });
+
       function createPondMesh() {
         const geometry = new THREE.CircleGeometry(POND_WATER_RADIUS, 48);
         geometry.rotateX(-Math.PI / 2);
@@ -623,6 +651,17 @@
           prop.mesh.material.dispose();
         }
         props.length = 0;
+      }
+
+      function disposeTrees() {
+        for (const tree of trees) {
+          scene.remove(tree.trunkMesh);
+          scene.remove(tree.foliageMesh);
+          tree.trunkMesh.geometry.dispose();
+          tree.foliageMesh.geometry.dispose();
+          tree.foliageMaterial.dispose();
+        }
+        trees.length = 0;
       }
 
       const heightGrid = new Float32Array(TERRAIN_GRID * TERRAIN_GRID);
@@ -860,6 +899,107 @@
         }
       }
 
+      function generateTrees() {
+        disposeTrees();
+        const treeRng = mulberry32(seed ^ 0x7ee5);
+        const targetCount = TREE_COUNT_MIN + Math.floor(treeRng() * TREE_COUNT_RANGE);
+        const baseHsl = { h: 0, s: 0, l: 0 };
+        TREE_FOLIAGE_BASE_COLOR.getHSL(baseHsl);
+        for (let i = 0; i < targetCount; i++) {
+          for (let attempt = 0; attempt < TREE_PLACEMENT_ATTEMPTS; attempt++) {
+            const trunkRadius = TREE_TRUNK_RADIUS_MIN + treeRng() * TREE_TRUNK_RADIUS_RANGE;
+            const trunkHeight = TREE_TRUNK_HEIGHT_MIN + treeRng() * TREE_TRUNK_HEIGHT_RANGE;
+            const foliageRadius = TREE_FOLIAGE_RADIUS_MIN + treeRng() * TREE_FOLIAGE_RADIUS_RANGE;
+            const foliageHeight = TREE_FOLIAGE_HEIGHT_MIN + treeRng() * TREE_FOLIAGE_HEIGHT_RANGE;
+            const posX = -TREE_PLACEMENT_HALF + treeRng() * 2 * TREE_PLACEMENT_HALF;
+            const posZ = -TREE_PLACEMENT_HALF + treeRng() * 2 * TREE_PLACEMENT_HALF;
+
+            const sdx = posX - SPAWN_X;
+            const sdz = posZ - SPAWN_Z;
+            if (sdx * sdx + sdz * sdz < TREE_SPAWN_EXCLUSION * TREE_SPAWN_EXCLUSION) continue;
+
+            const pdx = posX - pondCenterX;
+            const pdz = posZ - pondCenterZ;
+            if (pdx * pdx + pdz * pdz < TREE_POND_KEEPOUT * TREE_POND_KEEPOUT) continue;
+
+            let overlapsProp = false;
+            const propClearance = foliageRadius + TREE_PROP_BUFFER;
+            for (const p of props) {
+              const cx = Math.max(p.aabb.minX, Math.min(posX, p.aabb.maxX));
+              const cz = Math.max(p.aabb.minZ, Math.min(posZ, p.aabb.maxZ));
+              const ddx = posX - cx;
+              const ddz = posZ - cz;
+              if (ddx * ddx + ddz * ddz < propClearance * propClearance) {
+                overlapsProp = true;
+                break;
+              }
+            }
+            if (overlapsProp) continue;
+
+            let overlapsTree = false;
+            for (const t of trees) {
+              const ddx = posX - t.centerX;
+              const ddz = posZ - t.centerZ;
+              const r = foliageRadius + t.foliageRadius + TREE_TREE_BUFFER;
+              if (ddx * ddx + ddz * ddz < r * r) {
+                overlapsTree = true;
+                break;
+              }
+            }
+            if (overlapsTree) continue;
+
+            const baseY = heightAt(posX, posZ);
+
+            const trunkGeom = new THREE.CylinderGeometry(
+              trunkRadius, trunkRadius, trunkHeight, TREE_RADIAL_SEGMENTS,
+            );
+            const trunkMesh = new THREE.Mesh(trunkGeom, trunkMaterial);
+            trunkMesh.position.set(posX, baseY + trunkHeight / 2, posZ);
+
+            const hueShift = (treeRng() - 0.5) * 2 * TREE_FOLIAGE_HUE_VARIANCE;
+            const lightShift = (treeRng() - 0.5) * 2 * TREE_FOLIAGE_LIGHT_VARIANCE;
+            const foliageColor = new THREE.Color().setHSL(
+              (baseHsl.h + hueShift + 1) % 1,
+              baseHsl.s,
+              Math.max(0, Math.min(1, baseHsl.l + lightShift)),
+            );
+            const foliageMaterial = new THREE.MeshStandardMaterial({
+              color: foliageColor,
+              roughness: 0.85,
+              metalness: 0.0,
+            });
+            const foliageGeom = new THREE.ConeGeometry(
+              foliageRadius, foliageHeight, TREE_RADIAL_SEGMENTS,
+            );
+            const foliageMesh = new THREE.Mesh(foliageGeom, foliageMaterial);
+            foliageMesh.position.set(
+              posX,
+              baseY + trunkHeight + foliageHeight / 2,
+              posZ,
+            );
+
+            scene.add(trunkMesh);
+            scene.add(foliageMesh);
+            trees.push({
+              trunkMesh,
+              foliageMesh,
+              foliageMaterial,
+              centerX: posX,
+              centerZ: posZ,
+              foliageRadius,
+              aabb: {
+                minX: posX - foliageRadius,
+                maxX: posX + foliageRadius,
+                minZ: posZ - foliageRadius,
+                maxZ: posZ + foliageRadius,
+                topY: Infinity,
+              },
+            });
+            break;
+          }
+        }
+      }
+
       function computeSupportY(x, z) {
         let supportY = heightAt(x, z);
         for (const prop of props) {
@@ -895,6 +1035,22 @@
             else camera.position.z = exMaxZ + PUSH_EPS;
           }
         }
+        for (const tree of trees) {
+          const exMinX = tree.aabb.minX - PLAYER_RADIUS;
+          const exMaxX = tree.aabb.maxX + PLAYER_RADIUS;
+          const exMinZ = tree.aabb.minZ - PLAYER_RADIUS;
+          const exMaxZ = tree.aabb.maxZ + PLAYER_RADIUS;
+          const px = camera.position.x;
+          const pz = camera.position.z;
+          if (px <= exMinX || px >= exMaxX || pz <= exMinZ || pz >= exMaxZ) continue;
+          if (axis === 'x') {
+            if (dir > 0) camera.position.x = exMinX - PUSH_EPS;
+            else camera.position.x = exMaxX + PUSH_EPS;
+          } else {
+            if (dir > 0) camera.position.z = exMinZ - PUSH_EPS;
+            else camera.position.z = exMaxZ + PUSH_EPS;
+          }
+        }
       }
 
       function resetPlayerToSpawn() {
@@ -910,6 +1066,7 @@
       pondMesh = createPondMesh();
       scene.add(pondMesh);
       generate(seed);
+      generateTrees();
 
       function animate() {
         const delta = clock.getDelta();
@@ -956,6 +1113,7 @@
           pondMesh = createPondMesh();
           scene.add(pondMesh);
           generate(seed);
+          generateTrees();
           resetPlayerToSpawn();
           regenerateRequested = false;
         }
