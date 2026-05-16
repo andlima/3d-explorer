@@ -240,6 +240,110 @@
       #vf-failure-toast.visible {
         display: block;
       }
+
+      /* --- Mobile touch controls (only active on touch devices) --- */
+      #touch-look,
+      #touch-controls {
+        display: none;
+      }
+      body.touch-device.mobile-active #touch-look,
+      body.touch-device.mobile-active #touch-controls {
+        display: block;
+      }
+      #touch-look {
+        position: fixed;
+        inset: 0;
+        z-index: 3;
+        background: transparent;
+        touch-action: none;
+        overscroll-behavior: none;
+        user-select: none;
+        -webkit-user-select: none;
+        -webkit-tap-highlight-color: transparent;
+      }
+      #touch-controls {
+        position: fixed;
+        inset: 0;
+        z-index: 7;
+        pointer-events: none;
+        touch-action: none;
+        overscroll-behavior: none;
+        user-select: none;
+        -webkit-user-select: none;
+        -webkit-tap-highlight-color: transparent;
+      }
+      #touch-joystick {
+        position: fixed;
+        left: 24px;
+        bottom: 24px;
+        width: 120px;
+        height: 120px;
+        border-radius: 50%;
+        background: rgba(255, 255, 255, 0.08);
+        border: 2px solid rgba(255, 255, 255, 0.28);
+        pointer-events: auto;
+        touch-action: none;
+        box-sizing: border-box;
+      }
+      #touch-joystick-knob {
+        position: absolute;
+        left: 50%;
+        top: 50%;
+        width: 52px;
+        height: 52px;
+        margin: -26px 0 0 -26px;
+        border-radius: 50%;
+        background: rgba(255, 255, 255, 0.32);
+        border: 2px solid rgba(255, 255, 255, 0.55);
+        box-sizing: border-box;
+        will-change: transform;
+      }
+      #touch-buttons {
+        position: fixed;
+        right: 22px;
+        bottom: 24px;
+        display: flex;
+        flex-direction: column-reverse;
+        align-items: flex-end;
+        gap: 10px;
+        pointer-events: none;
+      }
+      .touch-btn {
+        pointer-events: auto;
+        touch-action: none;
+        width: 56px;
+        height: 56px;
+        border-radius: 50%;
+        background: rgba(0, 0, 0, 0.5);
+        border: 2px solid rgba(255, 255, 255, 0.45);
+        color: #fff;
+        font: bold 12px/1 ui-monospace, monospace;
+        letter-spacing: 0.5px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        box-sizing: border-box;
+        user-select: none;
+        -webkit-user-select: none;
+        -webkit-tap-highlight-color: transparent;
+      }
+      .touch-btn.pressed {
+        background: rgba(255, 255, 255, 0.28);
+      }
+      #touch-sprint.active {
+        background: rgba(108, 255, 102, 0.32);
+        border-color: #6cff66;
+        color: #6cff66;
+      }
+      #touch-shutter {
+        display: none;
+        width: 72px;
+        height: 72px;
+        border-width: 3px;
+      }
+      #touch-shutter.visible {
+        display: flex;
+      }
     </style>
     <script type="importmap">
       {
@@ -270,6 +374,19 @@
     <div id="catalog-counter">Captured 0 / 0</div>
     <div id="target-toast"></div>
     <div id="vf-failure-toast"></div>
+    <div id="touch-look"></div>
+    <div id="touch-controls">
+      <div id="touch-joystick">
+        <div id="touch-joystick-knob"></div>
+      </div>
+      <div id="touch-buttons">
+        <div id="touch-jump" class="touch-btn">JUMP</div>
+        <div id="touch-sprint" class="touch-btn">SPRINT</div>
+        <div id="touch-regen" class="touch-btn">REGEN</div>
+        <div id="touch-camera" class="touch-btn">CAM</div>
+        <div id="touch-shutter" class="touch-btn">SHOOT</div>
+      </div>
+    </div>
     <script type="module">
       import * as THREE from 'three';
       import { PointerLockControls } from 'three/addons/controls/PointerLockControls.js';
@@ -557,6 +674,11 @@
       const DEFAULT_FOV = 60;
       const MIN_FOV = 20;
       const MAX_FOV = 60;
+      // Touch-control tuning (single source of truth; tune after device testing)
+      const TOUCH_LOOK_SENSITIVITY = 0.0035;
+      const TOUCH_PINCH_FOV_SENSITIVITY = 0.06;
+      const JOYSTICK_RADIUS_PX = 55;
+      const JOYSTICK_DEADZONE = 8;
       const HIGHLIGHT_DURATION = 0.6;
       const INFO_DURATION = 2.5;
       const CAPTURE_MIN_FRAME_FRACTION = 0.16;
@@ -633,8 +755,61 @@
 
       const controls = new PointerLockControls(camera, document.body);
       const overlay = document.getElementById('lock-overlay');
+
+      // Touch device detection — gate the entire touch layer behind this so a
+      // non-touch device sees no change at all.
+      const isTouchDevice =
+        ('ontouchstart' in window) || navigator.maxTouchPoints > 0;
+      let mobileActive = false;
+      if (isTouchDevice) document.body.classList.add('touch-device');
+
+      // Single active predicate used everywhere movement/capture was gated on
+      // controls.isLocked. On desktop mobileActive is always false, so this is
+      // byte-for-byte equivalent to the old controls.isLocked check.
+      function isSessionActive() {
+        return controls.isLocked || mobileActive;
+      }
+
+      // Touch look state is owned by the touch layer. PLC never locks on touch,
+      // so its mousemove handler never runs and can't fight these values.
+      let touchYaw = 0;
+      let touchPitch = 0;
+      const TOUCH_PITCH_LIMIT = Math.PI / 2 - 0.1;
+      const _touchEuler = new THREE.Euler(0, 0, 0, 'YXZ');
+      function syncTouchLookFromCamera() {
+        _touchEuler.setFromQuaternion(camera.quaternion, 'YXZ');
+        touchYaw = _touchEuler.y;
+        touchPitch = _touchEuler.x;
+      }
+      function applyTouchLook() {
+        touchPitch = Math.max(
+          -TOUCH_PITCH_LIMIT,
+          Math.min(TOUCH_PITCH_LIMIT, touchPitch),
+        );
+        _touchEuler.set(touchPitch, touchYaw, 0, 'YXZ');
+        camera.quaternion.setFromEuler(_touchEuler);
+      }
+
+      // Touch DOM refs (present in markup regardless; CSS hides them off-touch).
+      const lookEl = document.getElementById('touch-look');
+      const joystickEl = document.getElementById('touch-joystick');
+      const joystickKnob = document.getElementById('touch-joystick-knob');
+      const jumpBtn = document.getElementById('touch-jump');
+      const sprintBtn = document.getElementById('touch-sprint');
+      const regenBtn = document.getElementById('touch-regen');
+      const cameraBtn = document.getElementById('touch-camera');
+      const shutterBtn = document.getElementById('touch-shutter');
+
       overlay.addEventListener('click', () => {
-        controls.lock();
+        if (isTouchDevice) {
+          // No pointer lock on touch — start a touch session instead.
+          mobileActive = true;
+          syncTouchLookFromCamera();
+          document.body.classList.add('mobile-active');
+          overlay.classList.add('hidden');
+        } else {
+          controls.lock();
+        }
       });
       controls.addEventListener('lock', () => {
         overlay.classList.add('hidden');
@@ -643,47 +818,24 @@
         overlay.classList.remove('hidden');
       });
 
-      const keys = Object.create(null);
-      let jumpQueued = false;
-      let regenerateRequested = false;
-      window.addEventListener('keydown', (e) => {
-        keys[e.code] = true;
-        if (e.code === 'Space' && !e.repeat) {
-          jumpQueued = true;
-        }
-        if (e.code === 'KeyR' && !e.repeat) {
-          regenerateRequested = true;
-          hideInfoCard();
-          hideTargetToast();
+      // Shared camera-mode toggle so the KeyC handler and the touch camera
+      // button can never drift apart.
+      function toggleCameraMode() {
+        cameraMode = !cameraMode;
+        viewfinderEl.classList.toggle('visible', cameraMode);
+        camIndicatorEl.classList.toggle('visible', cameraMode);
+        if (!cameraMode) {
+          targetFov = DEFAULT_FOV;
+          viewfinderEl.classList.remove('locked');
           hideFailureToast();
         }
-        if (e.code === 'KeyC' && !e.repeat) {
-          cameraMode = !cameraMode;
-          viewfinderEl.classList.toggle('visible', cameraMode);
-          camIndicatorEl.classList.toggle('visible', cameraMode);
-          if (!cameraMode) {
-            targetFov = DEFAULT_FOV;
-            viewfinderEl.classList.remove('locked');
-            hideFailureToast();
-          }
-        }
-      });
+        // Camera-only touch affordance mirrors how #viewfinder is shown.
+        shutterBtn.classList.toggle('visible', cameraMode);
+      }
 
-      window.addEventListener(
-        'wheel',
-        (e) => {
-          if (!cameraMode) return;
-          e.preventDefault();
-          targetFov = Math.max(
-            MIN_FOV,
-            Math.min(MAX_FOV, targetFov + Math.sign(e.deltaY) * 5),
-          );
-        },
-        { passive: false },
-      );
-
-      window.addEventListener('mousedown', (e) => {
-        if (!cameraMode || !controls.isLocked || e.button !== 0) return;
+      // Shared center-reticle capture decision so mousedown and the shutter
+      // button can never drift apart.
+      function performCapture() {
         raycaster.setFromCamera(aimNdc, camera);
         const hittables = props.map((p) => p.mesh).concat(targets.map((t) => t.mesh));
         const hits = raycaster.intersectObjects(hittables);
@@ -703,10 +855,204 @@
         if (!hitProp) return;
         hitProp.highlightT = HIGHLIGHT_DURATION;
         showInfoCard(hitProp.info);
+      }
+
+      const keys = Object.create(null);
+      let jumpQueued = false;
+      let regenerateRequested = false;
+      let sprintToggle = false;
+      function isSprinting() {
+        return keys['ShiftLeft'] || keys['ShiftRight'] || sprintToggle;
+      }
+      window.addEventListener('keydown', (e) => {
+        keys[e.code] = true;
+        if (e.code === 'Space' && !e.repeat) {
+          jumpQueued = true;
+        }
+        if (e.code === 'KeyR' && !e.repeat) {
+          regenerateRequested = true;
+          hideInfoCard();
+          hideTargetToast();
+          hideFailureToast();
+        }
+        if (e.code === 'KeyC' && !e.repeat) {
+          toggleCameraMode();
+        }
+      });
+
+      window.addEventListener(
+        'wheel',
+        (e) => {
+          if (!cameraMode) return;
+          e.preventDefault();
+          targetFov = Math.max(
+            MIN_FOV,
+            Math.min(MAX_FOV, targetFov + Math.sign(e.deltaY) * 5),
+          );
+        },
+        { passive: false },
+      );
+
+      window.addEventListener('mousedown', (e) => {
+        if (!cameraMode || !isSessionActive() || e.button !== 0) return;
+        performCapture();
       });
       window.addEventListener('keyup', (e) => {
         keys[e.code] = false;
       });
+
+      // --- Virtual joystick (lower-left): normalized forward/right in [-1,1] ---
+      let joystickActive = false;
+      let joyForward = 0;
+      let joyRight = 0;
+      let joystickPointerId = null;
+      let joyCx = 0;
+      let joyCy = 0;
+      function resetJoystick() {
+        joystickActive = false;
+        joyForward = 0;
+        joyRight = 0;
+        joystickPointerId = null;
+        joystickKnob.style.transform = 'translate(0px, 0px)';
+      }
+      function updateJoystick(x, y) {
+        const dx = x - joyCx;
+        const dy = y - joyCy;
+        const dist = Math.hypot(dx, dy);
+        if (dist < JOYSTICK_DEADZONE) {
+          joyForward = 0;
+          joyRight = 0;
+          joystickKnob.style.transform = 'translate(0px, 0px)';
+          return;
+        }
+        const mag = Math.min(1, dist / JOYSTICK_RADIUS_PX);
+        const ux = dx / dist;
+        const uy = dy / dist;
+        joyRight = ux * mag;
+        joyForward = -uy * mag;
+        joystickKnob.style.transform =
+          `translate(${ux * mag * JOYSTICK_RADIUS_PX}px, ${uy * mag * JOYSTICK_RADIUS_PX}px)`;
+      }
+
+      // --- Look + pinch surface (full-screen catch-all behind the HUD) ---
+      const lookPointers = new Map();
+      let pinchPrevDist = 0;
+
+      if (isTouchDevice) {
+        joystickEl.addEventListener('pointerdown', (e) => {
+          e.preventDefault();
+          if (joystickPointerId !== null) return;
+          joystickPointerId = e.pointerId;
+          joystickEl.setPointerCapture(e.pointerId);
+          const rect = joystickEl.getBoundingClientRect();
+          joyCx = rect.left + rect.width / 2;
+          joyCy = rect.top + rect.height / 2;
+          joystickActive = true;
+          updateJoystick(e.clientX, e.clientY);
+        });
+        joystickEl.addEventListener('pointermove', (e) => {
+          if (e.pointerId !== joystickPointerId) return;
+          e.preventDefault();
+          updateJoystick(e.clientX, e.clientY);
+        });
+        const endJoystick = (e) => {
+          if (e.pointerId !== joystickPointerId) return;
+          e.preventDefault();
+          resetJoystick();
+        };
+        joystickEl.addEventListener('pointerup', endJoystick);
+        joystickEl.addEventListener('pointercancel', endJoystick);
+
+        lookEl.addEventListener('pointerdown', (e) => {
+          e.preventDefault();
+          lookEl.setPointerCapture(e.pointerId);
+          lookPointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+          if (lookPointers.size === 2) {
+            const [a, b] = [...lookPointers.values()];
+            pinchPrevDist = Math.hypot(a.x - b.x, a.y - b.y);
+          }
+        });
+        lookEl.addEventListener('pointermove', (e) => {
+          const p = lookPointers.get(e.pointerId);
+          if (!p) return;
+          e.preventDefault();
+          const prevX = p.x;
+          const prevY = p.y;
+          p.x = e.clientX;
+          p.y = e.clientY;
+          if (lookPointers.size >= 2) {
+            // Two fingers down: this is a pinch — suppress look-drag.
+            const [a, b] = [...lookPointers.values()];
+            const dist = Math.hypot(a.x - b.x, a.y - b.y);
+            if (cameraMode) {
+              // Pinch out (distance grows) => zoom in => narrower FOV.
+              targetFov = Math.max(
+                MIN_FOV,
+                Math.min(
+                  MAX_FOV,
+                  targetFov - (dist - pinchPrevDist) * TOUCH_PINCH_FOV_SENSITIVITY,
+                ),
+              );
+            }
+            pinchPrevDist = dist;
+            return;
+          }
+          if (!isSessionActive()) return;
+          touchYaw -= (e.clientX - prevX) * TOUCH_LOOK_SENSITIVITY;
+          touchPitch -= (e.clientY - prevY) * TOUCH_LOOK_SENSITIVITY;
+          applyTouchLook();
+        });
+        const endLook = (e) => {
+          if (!lookPointers.has(e.pointerId)) return;
+          e.preventDefault();
+          lookPointers.delete(e.pointerId);
+          if (lookPointers.size === 2) {
+            const [a, b] = [...lookPointers.values()];
+            pinchPrevDist = Math.hypot(a.x - b.x, a.y - b.y);
+          }
+        };
+        lookEl.addEventListener('pointerup', endLook);
+        lookEl.addEventListener('pointercancel', endLook);
+
+        const bindButton = (el, onPress) => {
+          el.addEventListener('pointerdown', (e) => {
+            e.preventDefault();
+            el.classList.add('pressed');
+            onPress();
+          });
+          const release = (e) => {
+            e.preventDefault();
+            el.classList.remove('pressed');
+          };
+          el.addEventListener('pointerup', release);
+          el.addEventListener('pointercancel', release);
+          el.addEventListener('pointerleave', () => el.classList.remove('pressed'));
+        };
+        bindButton(jumpBtn, () => {
+          // Same as Space: one jump per press (grounded/air logic unchanged).
+          jumpQueued = true;
+        });
+        bindButton(regenBtn, () => {
+          // Mirror the KeyR handler exactly.
+          regenerateRequested = true;
+          hideInfoCard();
+          hideTargetToast();
+          hideFailureToast();
+        });
+        bindButton(cameraBtn, () => {
+          toggleCameraMode();
+        });
+        bindButton(shutterBtn, () => {
+          if (cameraMode && isSessionActive()) performCapture();
+        });
+        // Sprint is a toggle (holding a button while driving joystick + look
+        // is impractical); ORs into the existing sprint test via isSprinting().
+        sprintBtn.addEventListener('pointerdown', (e) => {
+          e.preventDefault();
+          sprintToggle = !sprintToggle;
+          sprintBtn.classList.toggle('active', sprintToggle);
+        });
+      }
 
       window.addEventListener('resize', () => {
         camera.aspect = window.innerWidth / window.innerHeight;
@@ -1460,6 +1806,11 @@
           generateTrees();
           generateTargets();
           resetPlayerToSpawn();
+          // Re-sync touch look to the reset orientation and release the
+          // joystick so nothing is left stale (mirrors desktop KeyR, which
+          // leaves look untouched). No-ops on desktop.
+          syncTouchLookFromCamera();
+          resetJoystick();
           regenerateRequested = false;
         }
 
@@ -1521,11 +1872,18 @@
 
         let forward = 0;
         let right = 0;
-        if (controls.isLocked) {
-          if (keys['KeyW'] || keys['ArrowUp']) forward += 1;
-          if (keys['KeyS'] || keys['ArrowDown']) forward -= 1;
-          if (keys['KeyD'] || keys['ArrowRight']) right += 1;
-          if (keys['KeyA'] || keys['ArrowLeft']) right -= 1;
+        if (isSessionActive()) {
+          if (joystickActive) {
+            // Joystick supplies the forward/right inputs the keyboard
+            // otherwise supplies; keyboard path stays intact for desktop.
+            forward = joyForward;
+            right = joyRight;
+          } else {
+            if (keys['KeyW'] || keys['ArrowUp']) forward += 1;
+            if (keys['KeyS'] || keys['ArrowDown']) forward -= 1;
+            if (keys['KeyD'] || keys['ArrowRight']) right += 1;
+            if (keys['KeyA'] || keys['ArrowLeft']) right -= 1;
+          }
 
           const lenSq = forward * forward + right * right;
           if (lenSq > 1) {
@@ -1536,8 +1894,7 @@
 
           let speed;
           if (isGrounded) {
-            const sprinting = keys['ShiftLeft'] || keys['ShiftRight'];
-            speed = sprinting ? WALK_SPEED * SPRINT_MULTIPLIER : WALK_SPEED;
+            speed = isSprinting() ? WALK_SPEED * SPRINT_MULTIPLIER : WALK_SPEED;
           } else {
             speed = airSpeed * AIR_CONTROL;
           }
@@ -1559,7 +1916,7 @@
           camera.position.z = Math.max(-HALF_EXTENT, Math.min(HALF_EXTENT, camera.position.z));
 
           if (isGrounded && jumpQueued) {
-            const groundSpeed = (keys['ShiftLeft'] || keys['ShiftRight'])
+            const groundSpeed = isSprinting()
               ? WALK_SPEED * SPRINT_MULTIPLIER
               : WALK_SPEED;
             velocityY = JUMP_VELOCITY;
