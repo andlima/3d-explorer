@@ -2,9 +2,12 @@
 
 All committed 3D assets used by 3d-explorer, with full provenance and license.
 
-Every asset below is original work authored for this project and dedicated to
-the public domain under **[CC0 1.0 Universal](https://creativecommons.org/publicdomain/zero/1.0/)**.
-No third-party, unverified, or non-free asset is committed.
+Every asset below is freely licensed under
+**[CC0 1.0 Universal](https://creativecommons.org/publicdomain/zero/1.0/)**
+(public domain dedication). The prop / landscape models are original work
+authored for this project; the wildlife creatures are the third-party
+Quaternius "Ultimate Monsters" CC0 pack. No unverified or non-free asset is
+committed.
 
 ## Models — `assets/models/`
 
@@ -20,11 +23,12 @@ No third-party, unverified, or non-free asset is committed.
 
 | File | Title | Author | Source | License |
 |------|-------|--------|--------|---------|
-| `wildlife/deer.glb` | Woodland Deer | 3d-explorer project | Authored via `tools/gen-wildlife.mjs` in this repository | CC0 1.0 (public domain) |
-| `wildlife/fox.glb` | Russet Fox | 3d-explorer project | Authored via `tools/gen-wildlife.mjs` in this repository | CC0 1.0 (public domain) |
-| `wildlife/rabbit.glb` | Meadow Rabbit | 3d-explorer project | Authored via `tools/gen-wildlife.mjs` in this repository | CC0 1.0 (public domain) |
-| `wildlife/bird.glb` | Bluewing Bird | 3d-explorer project | Authored via `tools/gen-wildlife.mjs` in this repository | CC0 1.0 (public domain) |
-| `wildlife/frog.glb` | Pond Frog | 3d-explorer project | Authored via `tools/gen-wildlife.mjs` in this repository | CC0 1.0 (public domain) |
+| `wildlife/cat.gltf` | Thicket Cat (Cat) | Quaternius — "Ultimate Monsters" | <https://quaternius.com/> | CC0 1.0 Universal (public domain dedication) |
+| `wildlife/dog.gltf` | Loam Hound (Dog) | Quaternius — "Ultimate Monsters" | <https://quaternius.com/> | CC0 1.0 Universal (public domain dedication) |
+| `wildlife/chicken.gltf` | Bramble Hen (Chicken) | Quaternius — "Ultimate Monsters" | <https://quaternius.com/> | CC0 1.0 Universal (public domain dedication) |
+| `wildlife/pigeon.gltf` | Cobble Pigeon (Pigeon) | Quaternius — "Ultimate Monsters" | <https://quaternius.com/> | CC0 1.0 Universal (public domain dedication) |
+| `wildlife/mushnub.gltf` | Mushnub | Quaternius — "Ultimate Monsters" | <https://quaternius.com/> | CC0 1.0 Universal (public domain dedication) |
+| `wildlife/armabee.gltf` | Armabee | Quaternius — "Ultimate Monsters" | <https://quaternius.com/> | CC0 1.0 Universal (public domain dedication) |
 
 ### Provenance notes
 
@@ -44,14 +48,14 @@ hosts. Authoring originals and dedicating them CC0 is the cleanest reachable
 public-domain source and keeps the committed binary weight tiny
 (~35 KB combined, uncompressed GLB, no DRACO/Meshopt).
 
-The five low-poly **wildlife** GLBs (`assets/models/wildlife/`) are likewise
-**original work** created specifically for 3d-explorer, produced
-deterministically by the committed authoring tool `tools/gen-wildlife.mjs`
-(run `node tools/gen-wildlife.mjs` to regenerate byte-identical files — same
-constraints: no dependencies, not part of the running site or any build step).
-The same restricted-network rationale applies: the reachable CC0 animal-model
-sets were unavailable, so originals were authored and dedicated to the public
-domain under CC0 1.0. They are flat-shaded primitive soups (boxes, spheres,
-cones) emitted with `doubleSided` materials and load through the **same**
-build-free GLB pipeline as the props; combined weight is ~180 KB uncompressed
-GLB (no DRACO/Meshopt) — still small for a build-free static site.
+The six **wildlife** creatures (`assets/models/wildlife/*.gltf`) are **not**
+project-authored. They are curated, real low-poly models from the Quaternius
+**"Ultimate Monsters"** pack, dedicated to the public domain under CC0 1.0.
+The pack's bundled `License.txt` states verbatim: *"Ultimate Platformer Pack
+by @Quaternius … License: CC0 1.0 Universal (CC0 1.0) Public Domain
+Dedication"*. Each `.gltf` is committed as-is and is self-contained — geometry,
+skin, animation clips, and the shared `Atlas_Monsters` texture are all embedded
+as base64 in the file, so no sidecar `.bin` or `.png` is committed (the
+redundant `Atlas_Monsters.png` shipped beside the originals is intentionally
+omitted). They load through the **same** build-free pipeline as the props via
+`GLTFLoader` with no extra decoders.

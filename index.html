@@ -395,6 +395,7 @@ Creatures 0 / 0</div>
       import * as THREE from 'three';
       import { PointerLockControls } from 'three/addons/controls/PointerLockControls.js';
       import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+      import { clone as cloneSkeleton } from 'three/addons/utils/SkeletonUtils.js';
 
       const scene = new THREE.Scene();
 
@@ -1107,12 +1108,16 @@ Creatures 0 / 0</div>
       ];
 
       // --- Wildlife (creature capture targets) ----------------------------
-      // A parallel catalog to TARGET_CATALOG. Each species' `file` is loaded
+      // A parallel catalog to TARGET_CATALOG. Each species' `file` is a curated
+      // CC0 Quaternius "Ultimate Monsters" .gltf (self-contained: geometry,
+      // skin, and the shared atlas texture are embedded as base64). Loaded
       // through the SAME model-asset pipeline as the props (relative to
       // assets/models/), normalized to `footprint`, and placed deterministically
       // by generateCreatures(). `weight` is the rarity weight used by the
-      // seeded placement RNG; `fallbackColor` is the procedural-primitive color
-      // if the GLB fails to load (identical fallback path as props).
+      // seeded placement RNG; `idleClip` is the looping clip played per
+      // instance via an AnimationMixer; `hover` lifts flying species above the
+      // ground (world units); `fallbackColor` is the procedural-primitive color
+      // if the model fails to load (identical fallback path as props).
       const CREATURE_COUNT = 9;
       const CREATURE_SPAWN_EXCLUSION = 5.0;
       const CREATURE_POND_KEEPOUT = 6.0;
@@ -1122,34 +1127,47 @@ Creatures 0 / 0</div>
       const CREATURE_PLACEMENT_HALF = 22.0;
       const CREATURE_PLACEMENT_ATTEMPTS = 30;
       const CREATURE_CAPTURED_DIM = 0.35;
-      const CREATURE_BOB_AMPLITUDE = 0.05;
+      // Subtle root bob/sway amplitudes — kept deliberately small so the
+      // procedural root motion does not fight the skeletal idle clip.
+      const CREATURE_BOB_AMPLITUDE = 0.02;
       const CREATURE_BOB_FREQUENCY = 1.6;
-      const CREATURE_SWAY_AMPLITUDE = 0.07;
+      const CREATURE_SWAY_AMPLITUDE = 0.03;
       const CREATURE_CATALOG = [
         {
-          key: 'wl_deer', file: 'wildlife/deer.glb', name: 'Woodland Deer',
-          flavor: 'Antlered and watchful, it holds the clearing like it owns it.',
-          footprint: 1.8, weight: 1, fallbackColor: 0x9c6b3f,
+          key: 'wl_cat', file: 'wildlife/cat.gltf', name: 'Thicket Cat',
+          idleClip: 'Idle',
+          flavor: 'A bramble-coated prowler that treats every thicket as its throne.',
+          footprint: 0.9, weight: 4, hover: 0, fallbackColor: 0x9c6b3f,
         },
         {
-          key: 'wl_fox', file: 'wildlife/fox.glb', name: 'Russet Fox',
-          flavor: 'A flame-bright coat and a tail that writes its own trail.',
-          footprint: 1.1, weight: 2, fallbackColor: 0xcf6a26,
+          key: 'wl_dog', file: 'wildlife/dog.gltf', name: 'Loam Hound',
+          idleClip: 'Idle',
+          flavor: 'Nose to the soil, it maps the meadow one stubborn sniff at a time.',
+          footprint: 1.0, weight: 3, hover: 0, fallbackColor: 0xb5793f,
         },
         {
-          key: 'wl_rabbit', file: 'wildlife/rabbit.glb', name: 'Meadow Rabbit',
-          flavor: 'Long-eared and still — gone the instant you blink.',
-          footprint: 0.6, weight: 4, fallbackColor: 0xa19f9c,
+          key: 'wl_chicken', file: 'wildlife/chicken.gltf', name: 'Bramble Hen',
+          idleClip: 'Idle',
+          flavor: 'Struts the underbrush, plainly indignant that you noticed it at all.',
+          footprint: 0.7, weight: 4, hover: 0, fallbackColor: 0xd8c074,
         },
         {
-          key: 'wl_bird', file: 'wildlife/bird.glb', name: 'Bluewing Bird',
-          flavor: 'Perched and bright, it surveys the grass for the day.',
-          footprint: 0.45, weight: 4, fallbackColor: 0x2f6bcb,
+          key: 'wl_pigeon', file: 'wildlife/pigeon.gltf', name: 'Cobble Pigeon',
+          idleClip: 'Idle',
+          flavor: 'Plump and unbothered, it owns whatever stone it happens to stand on.',
+          footprint: 0.55, weight: 4, hover: 0, fallbackColor: 0x8b95a6,
         },
         {
-          key: 'wl_frog', file: 'wildlife/frog.glb', name: 'Pond Frog',
-          flavor: 'A green stone with eyes, content beside the water.',
-          footprint: 0.6, weight: 2, fallbackColor: 0x3f8c33,
+          key: 'wl_mushnub', file: 'wildlife/mushnub.gltf', name: 'Mushnub',
+          idleClip: 'Idle',
+          flavor: 'A waddling cap of fungus that hums softly to itself in the damp.',
+          footprint: 0.7, weight: 2, hover: 0, fallbackColor: 0x6fae5e,
+        },
+        {
+          key: 'wl_armabee', file: 'wildlife/armabee.gltf', name: 'Armabee',
+          idleClip: 'Flying_Idle',
+          flavor: 'An armored little flier bumbling along on improbably stubborn wings.',
+          footprint: 0.7, weight: 1, hover: 1.3, fallbackColor: 0xc9a13b,
         },
       ];
       const CREATURE_WEIGHT_TOTAL = CREATURE_CATALOG.reduce(
@@ -1292,6 +1310,15 @@ Creatures 0 / 0</div>
                 loader.load(
                   `assets/models/${def.file}`,
                   (gltf) => {
+                    // Creature defs (those with an idleClip) keep their parsed
+                    // animation clips attached to the cached scene so
+                    // buildCreatureInstance can build a mixer without a second
+                    // fetch. .animations is a real Object3D field (not
+                    // userData), so it is never JSON-cloned. Props are
+                    // unaffected — they have no idleClip.
+                    if (def.idleClip) {
+                      gltf.scene.animations = gltf.animations;
+                    }
                     modelCache.set(def.key, gltf.scene);
                     done += 1;
                     onProgress(done, total);
@@ -1353,6 +1380,83 @@ Creatures 0 / 0</div>
         for (const g of built.ownedGeometries) g.dispose();
       }
 
+      // Ordered idle-clip resolution (AC 6): the per-entry idleClip, else a
+      // clip literally named `Idle`, else `Flying_Idle`, else the first clip.
+      function resolveIdleClip(animations, idleClip) {
+        if (!animations || animations.length === 0) return null;
+        return (
+          THREE.AnimationClip.findByName(animations, idleClip) ||
+          THREE.AnimationClip.findByName(animations, 'Idle') ||
+          THREE.AnimationClip.findByName(animations, 'Flying_Idle') ||
+          animations[0]
+        );
+      }
+
+      // Creature sibling of buildPropInstance. Returns
+      // { root, materials, ownedGeometries, mixer, action }. A cached scene is
+      // cloned with SkeletonUtils so each instance owns its own skeleton (a
+      // plain Object3D.clone(true) would share one skeleton and deform every
+      // instance together). Materials are cloned per instance so capture
+      // dimming never bleeds between instances; shared cached geometry and
+      // textures are neither cloned nor disposed. A per-instance AnimationMixer
+      // plays the resolved looping idle clip. On load failure the same
+      // procedural primitive as the prop fallback is used, with no mixer.
+      function buildCreatureInstance(def) {
+        const src = modelCache.get(def.key);
+        if (src) {
+          const root = cloneSkeleton(src);
+          const materials = [];
+          root.traverse((o) => {
+            if (o.isMesh) {
+              o.material = o.material.clone();
+              o.material.emissive.setRGB(1, 1, 1);
+              o.material.emissiveIntensity = 0;
+              materials.push(o.material);
+            }
+          });
+          let mixer = null;
+          let action = null;
+          const clip = resolveIdleClip(src.animations, def.idleClip);
+          if (clip) {
+            mixer = new THREE.AnimationMixer(root);
+            action = mixer.clipAction(clip);
+            action.setLoop(THREE.LoopRepeat, Infinity);
+            action.play();
+            // The mixer is intentionally NOT advanced here: the bind pose must
+            // survive until generateCreatures() has measured the footprint
+            // Box3. The per-instance phase offset is applied there.
+          }
+          return { root, materials, ownedGeometries: [], mixer, action };
+        }
+        const geometry = new THREE.IcosahedronGeometry(0.5, 0);
+        const material = new THREE.MeshStandardMaterial({
+          color: def.fallbackColor,
+          roughness: 0.9,
+          metalness: 0.0,
+        });
+        material.emissive.setRGB(1, 1, 1);
+        material.emissiveIntensity = 0;
+        const mesh = new THREE.Mesh(geometry, material);
+        const root = new THREE.Group();
+        root.add(mesh);
+        return {
+          root,
+          materials: [material],
+          ownedGeometries: [geometry],
+          mixer: null,
+          action: null,
+        };
+      }
+
+      function disposeCreatureInstance(built) {
+        if (built.mixer) {
+          built.mixer.stopAllAction();
+          built.mixer.uncacheRoot(built.root);
+        }
+        for (const m of built.materials) m.dispose();
+        for (const g of built.ownedGeometries) g.dispose();
+      }
+
       function disposeProps() {
         for (const prop of props) {
           scene.remove(prop.mesh);
@@ -1391,7 +1495,12 @@ Creatures 0 / 0</div>
           // Same discipline as disposeProps(): dispose only the per-instance
           // cloned materials and any geometry the fallback primitive owns.
           // The shared cached gltf.scene is never disposed, so R can rebuild
-          // creatures from the cache with no refetch.
+          // creatures from the cache with no refetch. The per-instance mixer
+          // is stopped and its root uncached so R leaks no mixers/actions.
+          if (creature.mixer) {
+            creature.mixer.stopAllAction();
+            creature.mixer.uncacheRoot(creature.mesh);
+          }
           for (const m of creature.materials) m.dispose();
           for (const g of creature.ownedGeometries) g.dispose();
         }
@@ -1790,7 +1899,7 @@ Creatures 0 / 0</div>
             // Build + normalize exactly as generate() does for props: uniform
             // scale to the footprint, apply the random Y rotation, then ground
             // the lowest point on the terrain.
-            const built = buildPropInstance(def);
+            const built = buildCreatureInstance(def);
             const root = built.root;
             root.position.set(0, 0, 0);
             root.rotation.set(0, 0, 0);
@@ -1803,7 +1912,16 @@ Creatures 0 / 0</div>
             root.updateMatrixWorld(true);
             const localBox = new THREE.Box3().setFromObject(root);
             const baseY = heightAt(posX, posZ);
-            root.position.set(posX, baseY - localBox.min.y, posZ);
+            // Box3 above is the bind pose (the mixer is not advanced until the
+            // offset below), so the footprint stays stable. `hover` lifts
+            // flying species above the grounded resting Y and is folded into
+            // creature.baseY so the idle bob oscillates about the hovered
+            // height rather than the terrain.
+            root.position.set(
+              posX,
+              baseY - localBox.min.y + (def.hover || 0),
+              posZ,
+            );
             root.updateMatrixWorld(true);
             const worldBox = new THREE.Box3().setFromObject(root);
             const size = worldBox.getSize(_tmpVec3);
@@ -1823,7 +1941,7 @@ Creatures 0 / 0</div>
               }
             }
             if (overlapsProp) {
-              disposePropInstance(built);
+              disposeCreatureInstance(built);
               continue;
             }
 
@@ -1838,7 +1956,7 @@ Creatures 0 / 0</div>
               }
             }
             if (overlapsTree) {
-              disposePropInstance(built);
+              disposeCreatureInstance(built);
               continue;
             }
 
@@ -1853,7 +1971,7 @@ Creatures 0 / 0</div>
               }
             }
             if (overlapsTarget) {
-              disposePropInstance(built);
+              disposeCreatureInstance(built);
               continue;
             }
 
@@ -1868,7 +1986,7 @@ Creatures 0 / 0</div>
               }
             }
             if (overlapsCreature) {
-              disposePropInstance(built);
+              disposeCreatureInstance(built);
               continue;
             }
 
@@ -1876,6 +1994,8 @@ Creatures 0 / 0</div>
               mesh: root,
               materials: built.materials,
               ownedGeometries: built.ownedGeometries,
+              mixer: built.mixer,
+              action: built.action,
               centerX: posX,
               centerZ: posZ,
               baseY: root.position.y,
@@ -1886,6 +2006,10 @@ Creatures 0 / 0</div>
               captured: false,
               catalogIndex,
             };
+            // Footprint Box3 measured (bind pose); now apply a deterministic
+            // per-instance idle phase from the seeded creature RNG so same-
+            // species instances are not animation-locked.
+            if (creature.mixer) creature.mixer.setTime(phase);
             root.userData.creatureRef = creature;
             scene.add(root);
             creatures.push(creature);
@@ -1902,6 +2026,10 @@ Creatures 0 / 0</div>
         }
         creature.mesh.position.y = creature.baseY;
         creature.mesh.rotation.y = creature.baseRotY;
+        // Freeze the idle skeletal motion in place (mirrors crystals halting
+        // their bob/spin on capture). Pausing the action holds the current
+        // pose; the animate loop also skips captured mixers.
+        if (creature.action) creature.action.paused = true;
         creatureCapturedCount++;
         updateCatalogCounter();
         showTargetToast(CREATURE_CATALOG[creature.catalogIndex]);
@@ -2106,6 +2234,9 @@ Creatures 0 / 0</div>
         // allocation — scalars only, mirroring the crystal bob above.
         for (const creature of creatures) {
           if (creature.captured) continue;
+          // Per-instance looping idle clip. Allocation-free; only non-captured
+          // creatures are advanced so a captured creature stays frozen.
+          if (creature.mixer) creature.mixer.update(delta);
           creature.mesh.position.y =
             creature.baseY +
             CREATURE_BOB_AMPLITUDE *
