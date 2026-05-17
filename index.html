@@ -356,7 +356,8 @@
   </head>
   <body>
     <div id="lock-overlay">
-      <h1>Click to play</h1>
+      <h1 id="lock-title">Loading…</h1>
+      <p id="lock-status">Loading models…</p>
       <p>WASD / arrows to move &middot; Shift to sprint &middot; Space to jump &middot; R to randomize &middot; C to toggle camera &middot; mouse to look &middot; ESC to release</p>
     </div>
     <div id="viewfinder">
@@ -390,6 +391,7 @@
     <script type="module">
       import * as THREE from 'three';
       import { PointerLockControls } from 'three/addons/controls/PointerLockControls.js';
+      import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
       const scene = new THREE.Scene();
 
@@ -405,7 +407,6 @@
       const renderer = new THREE.WebGLRenderer({ antialias: true });
       renderer.setPixelRatio(window.devicePixelRatio);
       renderer.setSize(window.innerWidth, window.innerHeight);
-      const MAX_ANISO = renderer.capabilities.getMaxAnisotropy();
       document.body.appendChild(renderer.domElement);
 
       const terrainMaterial = new THREE.MeshStandardMaterial({
@@ -575,102 +576,6 @@
         };
       }
 
-      function makeCanvas(size = 256) {
-        const canvas = document.createElement('canvas');
-        canvas.width = size;
-        canvas.height = size;
-        return canvas;
-      }
-
-      function createCheckerTexture() {
-        const size = 256;
-        const cells = 8;
-        const cell = size / cells;
-        const canvas = makeCanvas(size);
-        const ctx = canvas.getContext('2d');
-        ctx.filter = 'blur(1.0px)';
-        for (let y = 0; y < cells; y++) {
-          for (let x = 0; x < cells; x++) {
-            ctx.fillStyle = (x + y) % 2 === 0 ? '#B0B0B0' : '#5C5C5C';
-            ctx.fillRect(x * cell, y * cell, cell, cell);
-          }
-        }
-        ctx.filter = 'none';
-        const tex = new THREE.CanvasTexture(canvas);
-        tex.anisotropy = MAX_ANISO;
-        return tex;
-      }
-
-      function createStripesTexture() {
-        const size = 256;
-        const canvas = makeCanvas(size);
-        const ctx = canvas.getContext('2d');
-        for (let x = 0; x < size; x++) {
-          const v = 0.62 + 0.22 * Math.sin((x / size) * Math.PI * 8);
-          const g = Math.round(v * 255);
-          ctx.fillStyle = `rgb(${g}, ${g}, ${g})`;
-          ctx.fillRect(x, 0, 1, size);
-        }
-        const tex = new THREE.CanvasTexture(canvas);
-        tex.anisotropy = MAX_ANISO;
-        return tex;
-      }
-
-      function createDotsTexture() {
-        const size = 256;
-        const cells = 6;
-        const cell = size / cells;
-        const radius = 11;
-        const canvas = makeCanvas(size);
-        const ctx = canvas.getContext('2d');
-        ctx.fillStyle = '#C0C0C0';
-        ctx.fillRect(0, 0, size, size);
-        ctx.fillStyle = '#5A5A5A';
-        for (let y = 0; y < cells; y++) {
-          for (let x = 0; x < cells; x++) {
-            const cx = x * cell + cell / 2;
-            const cy = y * cell + cell / 2;
-            ctx.beginPath();
-            ctx.arc(cx, cy, radius, 0, Math.PI * 2);
-            ctx.fill();
-          }
-        }
-        const tex = new THREE.CanvasTexture(canvas);
-        tex.anisotropy = MAX_ANISO;
-        return tex;
-      }
-
-      function createNoiseTexture() {
-        const size = 256;
-        const small = makeCanvas(16);
-        const smallCtx = small.getContext('2d');
-        const img = smallCtx.createImageData(16, 16);
-        const data = img.data;
-        for (let i = 0; i < 16 * 16; i++) {
-          const r = Math.random();
-          const v = Math.round((0.45 + r * 0.40) * 255);
-          data[i * 4 + 0] = v;
-          data[i * 4 + 1] = v;
-          data[i * 4 + 2] = v;
-          data[i * 4 + 3] = 255;
-        }
-        smallCtx.putImageData(img, 0, 0);
-        const canvas = makeCanvas(size);
-        const ctx = canvas.getContext('2d');
-        ctx.drawImage(small, 0, 0, size, size);
-        const tex = new THREE.CanvasTexture(canvas);
-        tex.anisotropy = MAX_ANISO;
-        return tex;
-      }
-
-      const baseTextures = [
-        createCheckerTexture(),
-        createStripesTexture(),
-        createDotsTexture(),
-        createNoiseTexture(),
-      ];
-      const TEXTURE_NAMES = ['checker', 'stripes', 'dots', 'noise'];
-
       const DEFAULT_FOV = 60;
       const MIN_FOV = 20;
       const MAX_FOV = 60;
@@ -687,6 +592,7 @@
       const FAILURE_TOAST_MESSAGE = 'OUT OF FRAME — ZOOM IN OR GET CLOSER';
 
       let cameraMode = false;
+      let assetsReady = false;
       let targetFov = DEFAULT_FOV;
       let infoTimer = 0;
       let failureToastTimer = 0;
@@ -704,12 +610,7 @@
       const targetToastEl = document.getElementById('target-toast');
 
       function showInfoCard(info) {
-        infoCardEl.textContent =
-          `shape: ${info.shape}\n` +
-          `dims: ${info.dims}\n` +
-          `color: ${info.colorHex}\n` +
-          `material: rough=${info.roughness.toFixed(2)} metal=${info.metalness.toFixed(2)}\n` +
-          `texture: ${info.textureName}`;
+        infoCardEl.textContent = `${info.name}\n${info.flavor}`;
         infoCardEl.classList.add('visible');
         infoTimer = INFO_DURATION;
       }
@@ -755,6 +656,8 @@
 
       const controls = new PointerLockControls(camera, document.body);
       const overlay = document.getElementById('lock-overlay');
+      const lockTitleEl = document.getElementById('lock-title');
+      const lockStatusEl = document.getElementById('lock-status');
 
       // Touch device detection — gate the entire touch layer behind this so a
       // non-touch device sees no change at all.
@@ -801,6 +704,9 @@
       const shutterBtn = document.getElementById('touch-shutter');
 
       overlay.addEventListener('click', () => {
+        // Gated start: ignore clicks until asset preloading has resolved
+        // (or fallen back). lockTitleEl still reads "Loading…" until then.
+        if (!assetsReady) return;
         if (isTouchDevice) {
           // No pointer lock on touch — start a touch session instead.
           mobileActive = true;
@@ -835,13 +741,24 @@
 
       // Shared center-reticle capture decision so mousedown and the shutter
       // button can never drift apart.
+      // Props are glTF Groups, so raycasts hit child meshes. Walk up from the
+      // hit object to the instance root tagged with userData.propRef.
+      function resolvePropFromHit(object) {
+        let o = object;
+        while (o) {
+          if (o.userData && o.userData.propRef) return o.userData.propRef;
+          o = o.parent;
+        }
+        return null;
+      }
+
       function performCapture() {
         raycaster.setFromCamera(aimNdc, camera);
         const hittables = props.map((p) => p.mesh).concat(targets.map((t) => t.mesh));
-        const hits = raycaster.intersectObjects(hittables);
+        const hits = raycaster.intersectObjects(hittables, true);
         if (hits.length === 0) return;
-        const hitMesh = hits[0].object;
-        const hitTarget = targets.find((t) => t.mesh === hitMesh);
+        const hitObject = hits[0].object;
+        const hitTarget = targets.find((t) => t.mesh === hitObject);
         if (hitTarget) {
           if (hitTarget.captured) return;
           if (isTargetFramed(hitTarget)) {
@@ -851,7 +768,7 @@
           }
           return;
         }
-        const hitProp = props.find((p) => p.mesh === hitMesh);
+        const hitProp = resolvePropFromHit(hitObject);
         if (!hitProp) return;
         hitProp.highlightT = HIGHLIGHT_DURATION;
         showInfoCard(hitProp.info);
@@ -1235,12 +1152,112 @@
         return mesh;
       }
 
+      // --- Model asset pipeline -------------------------------------------
+      // Build-free: GLBs are committed under assets/ and served same-origin.
+      // Each model is fetched/parsed exactly once at startup; placed props
+      // clone from the cache (geometry is shared with the cache; materials
+      // are cloned per instance so highlight state is isolated).
+      const MODEL_DEFS = [
+        { key: 'rock', file: 'rock.glb', name: 'Mossy Rock',
+          flavor: 'Weathered stone — a quiet landmark.',
+          footprint: 1.3, fallbackColor: 0x77787a },
+        { key: 'log', file: 'log.glb', name: 'Fallen Log',
+          flavor: 'A toppled trunk slowly returning to the soil.',
+          footprint: 2.3, fallbackColor: 0x6b4a2b },
+        { key: 'mushroom', file: 'mushroom.glb', name: 'Forest Mushroom',
+          flavor: 'A red-capped fungus thriving in the shade.',
+          footprint: 0.8, fallbackColor: 0xc0392b },
+        { key: 'stump', file: 'stump.glb', name: 'Tree Stump',
+          flavor: 'All that remains of an old forest giant.',
+          footprint: 1.1, fallbackColor: 0x5c3a1e },
+        { key: 'crystal_cluster', file: 'crystal_cluster.glb', name: 'Crystal Cluster',
+          flavor: 'Faceted shards humming with faint light.',
+          footprint: 1.2, fallbackColor: 0x6c5ce7 },
+      ];
+      const modelCache = new Map();
+      const _tmpVec3 = new THREE.Vector3();
+
+      function preloadModels(onProgress) {
+        const loader = new GLTFLoader();
+        const total = MODEL_DEFS.length;
+        let done = 0;
+        onProgress(0, total);
+        return Promise.all(
+          MODEL_DEFS.map(
+            (def) =>
+              new Promise((resolve) => {
+                loader.load(
+                  `assets/models/${def.file}`,
+                  (gltf) => {
+                    modelCache.set(def.key, gltf.scene);
+                    done += 1;
+                    onProgress(done, total);
+                    resolve();
+                  },
+                  undefined,
+                  (err) => {
+                    console.warn(
+                      `[model-asset-pipeline] Failed to load assets/models/${def.file}; ` +
+                        'falling back to a procedural primitive for this prop.',
+                      err,
+                    );
+                    modelCache.set(def.key, null);
+                    done += 1;
+                    onProgress(done, total);
+                    resolve();
+                  },
+                );
+              }),
+          ),
+        );
+      }
+
+      // Returns { root, materials, ownedGeometries }. For a cached model the
+      // root is a clone (shared geometry, per-instance cloned materials, so
+      // ownedGeometries is empty). On load failure a procedural primitive is
+      // built so the scene stays fully playable offline / on asset failure.
+      function buildPropInstance(def) {
+        const src = modelCache.get(def.key);
+        if (src) {
+          const root = src.clone(true);
+          const materials = [];
+          root.traverse((o) => {
+            if (o.isMesh) {
+              o.material = o.material.clone();
+              o.material.emissive.setRGB(1, 1, 1);
+              o.material.emissiveIntensity = 0;
+              materials.push(o.material);
+            }
+          });
+          return { root, materials, ownedGeometries: [] };
+        }
+        const geometry = new THREE.IcosahedronGeometry(0.5, 0);
+        const material = new THREE.MeshStandardMaterial({
+          color: def.fallbackColor,
+          roughness: 0.9,
+          metalness: 0.0,
+        });
+        material.emissive.setRGB(1, 1, 1);
+        material.emissiveIntensity = 0;
+        const mesh = new THREE.Mesh(geometry, material);
+        const root = new THREE.Group();
+        root.add(mesh);
+        return { root, materials: [material], ownedGeometries: [geometry] };
+      }
+
+      function disposePropInstance(built) {
+        for (const m of built.materials) m.dispose();
+        for (const g of built.ownedGeometries) g.dispose();
+      }
+
       function disposeProps() {
         for (const prop of props) {
           scene.remove(prop.mesh);
-          prop.mesh.geometry.dispose();
-          if (prop.mesh.material.map) prop.mesh.material.map.dispose();
-          prop.mesh.material.dispose();
+          // Per-instance clones only: cloned materials (every prop) and any
+          // geometry the instance owns (fallback primitives). The shared
+          // cached gltf.scene geometry/materials are never disposed.
+          for (const m of prop.materials) m.dispose();
+          for (const g of prop.ownedGeometries) g.dispose();
         }
         props.length = 0;
       }
@@ -1348,74 +1365,42 @@
 
         const targetCount = 15 + Math.floor(rng() * 16);
         for (let i = 0; i < targetCount; i++) {
-          let placed = false;
-          for (let attempt = 0; attempt < 30 && !placed; attempt++) {
-            const shapeIdx = Math.floor(rng() * 4);
+          for (let attempt = 0; attempt < 30; attempt++) {
+            const def = MODEL_DEFS[Math.floor(rng() * MODEL_DEFS.length)];
             const posX = -22 + rng() * 44;
             const posZ = -22 + rng() * 44;
+            const rotY = rng() * Math.PI * 2;
             const baseY = heightAt(posX, posZ);
 
-            let geometry;
-            let posY;
-            let halfX;
-            let halfZ;
-            let topY;
-            let maxExtent;
-            let shapeName;
-            let dimsStr;
+            const built = buildPropInstance(def);
+            const root = built.root;
 
-            if (shapeIdx === 0) {
-              const w = 0.6 + rng() * 1.9;
-              const h = 0.6 + rng() * 1.9;
-              const d = 0.6 + rng() * 1.9;
-              geometry = new THREE.BoxGeometry(w, h, d);
-              posY = h / 2;
-              halfX = w / 2;
-              halfZ = d / 2;
-              topY = h;
-              maxExtent = Math.max(w, h, d);
-              shapeName = 'Box';
-              dimsStr = `${w.toFixed(2)} × ${h.toFixed(2)} × ${d.toFixed(2)}`;
-            } else if (shapeIdx === 1) {
-              const r = 0.5 + rng() * 1.0;
-              geometry = new THREE.SphereGeometry(r, 16, 12);
-              posY = r;
-              halfX = r;
-              halfZ = r;
-              topY = 2 * r;
-              maxExtent = 2 * r;
-              shapeName = 'Sphere';
-              dimsStr = `r=${r.toFixed(2)}`;
-            } else if (shapeIdx === 2) {
-              const r = 0.4 + rng() * 0.8;
-              const h = 0.6 + rng() * 1.9;
-              geometry = new THREE.CylinderGeometry(r, r, h, 16);
-              posY = h / 2;
-              halfX = r;
-              halfZ = r;
-              topY = h;
-              maxExtent = Math.max(2 * r, h);
-              shapeName = 'Cylinder';
-              dimsStr = `r=${r.toFixed(2)} h=${h.toFixed(2)}`;
-            } else {
-              const r = 0.4 + rng() * 0.8;
-              const h = 0.8 + rng() * 2.2;
-              geometry = new THREE.ConeGeometry(r, h, 16);
-              posY = h / 2;
-              halfX = r;
-              halfZ = r;
-              topY = h;
-              maxExtent = Math.max(2 * r, h);
-              shapeName = 'Cone';
-              dimsStr = `r=${r.toFixed(2)} h=${h.toFixed(2)}`;
-            }
+            // Normalize: uniform-scale to the target footprint, apply the
+            // random Y rotation, then ground the lowest point on the terrain.
+            root.position.set(0, 0, 0);
+            root.rotation.set(0, 0, 0);
+            root.scale.set(1, 1, 1);
+            root.updateMatrixWorld(true);
+            const rawSize = new THREE.Box3()
+              .setFromObject(root)
+              .getSize(_tmpVec3);
+            const maxHoriz = Math.max(rawSize.x, rawSize.z) || 1;
+            root.scale.setScalar(def.footprint / maxHoriz);
+            root.rotation.y = rotY;
+            root.updateMatrixWorld(true);
+            const localBox = new THREE.Box3().setFromObject(root);
+            root.position.set(posX, baseY - localBox.min.y, posZ);
+            root.updateMatrixWorld(true);
+            const worldBox = new THREE.Box3().setFromObject(root);
 
+            // Recomputed from normalized world bounds; same shape as before so
+            // computeSupportY()/pushOutAxis() keep working unchanged.
             const aabb = {
-              minX: posX - halfX,
-              maxX: posX + halfX,
-              minZ: posZ - halfZ,
-              maxZ: posZ + halfZ,
-              topY: baseY + topY,
+              minX: worldBox.min.x,
+              maxX: worldBox.max.x,
+              minZ: worldBox.min.z,
+              maxZ: worldBox.max.z,
+              topY: worldBox.max.y,
             };
 
             const exMinX = aabb.minX - PLAYER_RADIUS;
@@ -1427,14 +1412,14 @@
             const ddx = cx - SPAWN_X;
             const ddz = cz - SPAWN_Z;
             if (ddx * ddx + ddz * ddz < SPAWN_EXCLUSION_RADIUS * SPAWN_EXCLUSION_RADIUS) {
-              geometry.dispose();
+              disposePropInstance(built);
               continue;
             }
 
             const pdx2 = posX - pondCenterX;
             const pdz2 = posZ - pondCenterZ;
             if (pdx2 * pdx2 + pdz2 * pdz2 < POND_PROP_KEEPOUT * POND_PROP_KEEPOUT) {
-              geometry.dispose();
+              disposePropInstance(built);
               continue;
             }
 
@@ -1451,51 +1436,22 @@
               }
             }
             if (overlaps) {
-              geometry.dispose();
+              disposePropInstance(built);
               continue;
             }
 
-            const textureIdx = Math.floor(rng() * 4);
-            const baseTexture = baseTextures[textureIdx];
-            const tex = baseTexture.clone();
-            tex.needsUpdate = true;
-            tex.wrapS = THREE.RepeatWrapping;
-            tex.wrapT = THREE.RepeatWrapping;
-            const repeatVal = Math.max(1, Math.round(maxExtent));
-            tex.repeat.set(repeatVal, repeatVal);
-
-            const hue = rng();
-            const sat = 0.4 + rng() * 0.4;
-            const light = 0.45 + rng() * 0.25;
-            const color = new THREE.Color().setHSL(hue, sat, light);
-            const roughness = 0.4 + rng() * 0.6;
-            const metalness = rng() * 0.3;
-
-            const material = new THREE.MeshStandardMaterial({
-              map: tex,
-              color,
-              roughness,
-              metalness,
-            });
-            material.emissive.setRGB(1, 1, 1);
-            material.emissiveIntensity = 0;
-
-            const mesh = new THREE.Mesh(geometry, material);
-            mesh.position.set(posX, baseY + posY, posZ);
-            mesh.rotation.y = rng() * Math.PI * 2;
-
-            const info = {
-              shape: shapeName,
-              dims: dimsStr,
-              colorHex: '#' + color.getHexString(),
-              roughness,
-              metalness,
-              textureName: TEXTURE_NAMES[textureIdx],
+            const prop = {
+              mesh: root,
+              aabb,
+              info: { name: def.name, flavor: def.flavor },
+              highlightT: 0,
+              materials: built.materials,
+              ownedGeometries: built.ownedGeometries,
             };
-
-            scene.add(mesh);
-            props.push({ mesh, aabb, info, highlightT: 0 });
-            placed = true;
+            root.userData.propRef = prop;
+            scene.add(root);
+            props.push(prop);
+            break;
           }
         }
       }
@@ -1754,9 +1710,23 @@
       terrainMesh.geometry = buildTerrainGeometry(seed);
       pondMesh = createPondMesh();
       scene.add(pondMesh);
-      generate(seed);
-      generateTrees();
-      generateTargets();
+
+      // Asset preloading must resolve (load or fall back) before the first
+      // generate() runs and before the lock overlay enables start.
+      preloadModels((loaded, total) => {
+        lockStatusEl.textContent =
+          loaded < total
+            ? `Loading models… ${loaded} / ${total}`
+            : 'Finalizing…';
+      }).then(() => {
+        generate(seed);
+        generateTrees();
+        generateTargets();
+        assetsReady = true;
+        lockTitleEl.textContent = 'Click to play';
+        lockStatusEl.textContent = 'Models ready';
+        animate();
+      });
 
       function animate() {
         const delta = clock.getDelta();
@@ -1830,10 +1800,10 @@
         if (cameraMode) {
           raycaster.setFromCamera(aimNdc, camera);
           const hittables = props.map((p) => p.mesh).concat(targets.map((t) => t.mesh));
-          const hits = raycaster.intersectObjects(hittables);
+          const hits = raycaster.intersectObjects(hittables, true);
           if (hits.length > 0) {
-            const hitMesh = hits[0].object;
-            const hitTarget = targets.find((t) => t.mesh === hitMesh);
+            const hitObject = hits[0].object;
+            const hitTarget = targets.find((t) => t.mesh === hitObject);
             if (hitTarget && !hitTarget.captured && isTargetFramed(hitTarget)) {
               focusLocked = true;
             }
@@ -1843,8 +1813,8 @@
 
         for (const prop of props) {
           prop.highlightT = Math.max(0, prop.highlightT - delta);
-          prop.mesh.material.emissiveIntensity =
-            (prop.highlightT / HIGHLIGHT_DURATION) * 0.8;
+          const emissiveIntensity = (prop.highlightT / HIGHLIGHT_DURATION) * 0.8;
+          for (const m of prop.materials) m.emissiveIntensity = emissiveIntensity;
         }
 
         for (const target of targets) {
@@ -1949,7 +1919,8 @@
         renderer.render(scene, camera);
         requestAnimationFrame(animate);
       }
-      animate();
+      // animate() is started by preloadModels().then(...) above, once asset
+      // loading has resolved and the first generate() has run.
     </script>
   </body>
 </html>
