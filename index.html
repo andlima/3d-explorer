@@ -208,17 +208,19 @@
         top: 8px;
         right: 8px;
         padding: 4px 8px;
-        font: 12px/1 ui-monospace, monospace;
+        font: 12px/1.5 ui-monospace, monospace;
         color: #fff;
         background: rgba(0, 0, 0, 0.55);
         border-radius: 3px;
+        white-space: pre-line;
+        text-align: right;
         pointer-events: none;
         user-select: none;
         z-index: 5;
       }
       #target-toast {
         position: fixed;
-        top: 32px;
+        top: 56px;
         right: 8px;
         padding: 6px 10px;
         font: 12px/1.4 ui-monospace, monospace;
@@ -372,7 +374,8 @@
     </div>
     <div id="cam-indicator">CAM ON</div>
     <div id="info-card"></div>
-    <div id="catalog-counter">Captured 0 / 0</div>
+    <div id="catalog-counter">Crystals 0 / 0
+Creatures 0 / 0</div>
     <div id="target-toast"></div>
     <div id="vf-failure-toast"></div>
     <div id="touch-look"></div>
@@ -620,8 +623,12 @@
         infoTimer = 0;
       }
 
+      // Two clearly delineated catalogs: crystals and creatures are counted
+      // and displayed independently so the two are never conflated.
       function updateCatalogCounter() {
-        catalogCounterEl.textContent = `Captured ${capturedCount} / ${targets.length}`;
+        catalogCounterEl.textContent =
+          `Crystals ${capturedCount} / ${targets.length}\n` +
+          `Creatures ${creatureCapturedCount} / ${creatures.length}`;
       }
 
       function showTargetToast(entry) {
@@ -635,9 +642,11 @@
         targetToastTimer = 0;
       }
 
-      function isTargetFramed(target) {
+      // `radius` defaults to the crystal TARGET_RADIUS so all existing crystal
+      // call sites are unchanged; creatures pass their own bounding radius.
+      function isTargetFramed(target, radius = TARGET_RADIUS) {
         const distance = camera.position.distanceTo(target.mesh.position);
-        const angularRadius = Math.atan2(TARGET_RADIUS, distance);
+        const angularRadius = Math.atan2(radius, distance);
         const halfVFov = (camera.fov * Math.PI / 180) / 2;
         const frameFraction = angularRadius / halfVFov;
         return frameFraction >= CAPTURE_MIN_FRAME_FRACTION;
@@ -752,9 +761,23 @@
         return null;
       }
 
+      // Creatures are cloned glTF Groups too; same parent-walk as props but
+      // tagged with userData.creatureRef so the two never cross-resolve.
+      function resolveCreatureFromHit(object) {
+        let o = object;
+        while (o) {
+          if (o.userData && o.userData.creatureRef) return o.userData.creatureRef;
+          o = o.parent;
+        }
+        return null;
+      }
+
       function performCapture() {
         raycaster.setFromCamera(aimNdc, camera);
-        const hittables = props.map((p) => p.mesh).concat(targets.map((t) => t.mesh));
+        const hittables = props
+          .map((p) => p.mesh)
+          .concat(targets.map((t) => t.mesh))
+          .concat(creatures.map((c) => c.mesh));
         const hits = raycaster.intersectObjects(hittables, true);
         if (hits.length === 0) return;
         const hitObject = hits[0].object;
@@ -763,6 +786,16 @@
           if (hitTarget.captured) return;
           if (isTargetFramed(hitTarget)) {
             captureTarget(hitTarget);
+          } else {
+            showFailureToast();
+          }
+          return;
+        }
+        const hitCreature = resolveCreatureFromHit(hitObject);
+        if (hitCreature) {
+          if (hitCreature.captured) return;
+          if (isTargetFramed(hitCreature, hitCreature.frameRadius)) {
+            captureCreature(hitCreature);
           } else {
             showFailureToast();
           }
@@ -1072,6 +1105,68 @@
           color: 0xffcc33,
         },
       ];
+
+      // --- Wildlife (creature capture targets) ----------------------------
+      // A parallel catalog to TARGET_CATALOG. Each species' `file` is loaded
+      // through the SAME model-asset pipeline as the props (relative to
+      // assets/models/), normalized to `footprint`, and placed deterministically
+      // by generateCreatures(). `weight` is the rarity weight used by the
+      // seeded placement RNG; `fallbackColor` is the procedural-primitive color
+      // if the GLB fails to load (identical fallback path as props).
+      const CREATURE_COUNT = 9;
+      const CREATURE_SPAWN_EXCLUSION = 5.0;
+      const CREATURE_POND_KEEPOUT = 6.0;
+      const CREATURE_PROP_BUFFER = 0.6;
+      const CREATURE_TREE_BUFFER = 0.8;
+      const CREATURE_OTHER_BUFFER = 1.6;
+      const CREATURE_PLACEMENT_HALF = 22.0;
+      const CREATURE_PLACEMENT_ATTEMPTS = 30;
+      const CREATURE_CAPTURED_DIM = 0.35;
+      const CREATURE_BOB_AMPLITUDE = 0.05;
+      const CREATURE_BOB_FREQUENCY = 1.6;
+      const CREATURE_SWAY_AMPLITUDE = 0.07;
+      const CREATURE_CATALOG = [
+        {
+          key: 'wl_deer', file: 'wildlife/deer.glb', name: 'Woodland Deer',
+          flavor: 'Antlered and watchful, it holds the clearing like it owns it.',
+          footprint: 1.8, weight: 1, fallbackColor: 0x9c6b3f,
+        },
+        {
+          key: 'wl_fox', file: 'wildlife/fox.glb', name: 'Russet Fox',
+          flavor: 'A flame-bright coat and a tail that writes its own trail.',
+          footprint: 1.1, weight: 2, fallbackColor: 0xcf6a26,
+        },
+        {
+          key: 'wl_rabbit', file: 'wildlife/rabbit.glb', name: 'Meadow Rabbit',
+          flavor: 'Long-eared and still — gone the instant you blink.',
+          footprint: 0.6, weight: 4, fallbackColor: 0xa19f9c,
+        },
+        {
+          key: 'wl_bird', file: 'wildlife/bird.glb', name: 'Bluewing Bird',
+          flavor: 'Perched and bright, it surveys the grass for the day.',
+          footprint: 0.45, weight: 4, fallbackColor: 0x2f6bcb,
+        },
+        {
+          key: 'wl_frog', file: 'wildlife/frog.glb', name: 'Pond Frog',
+          flavor: 'A green stone with eyes, content beside the water.',
+          footprint: 0.6, weight: 2, fallbackColor: 0x3f8c33,
+        },
+      ];
+      const CREATURE_WEIGHT_TOTAL = CREATURE_CATALOG.reduce(
+        (s, c) => s + c.weight,
+        0,
+      );
+      // Seeded weighted pick: rng() in [0,1) → a CREATURE_CATALOG index,
+      // biased by `weight` so rarer species appear less often.
+      function pickCreatureIndex(r) {
+        let x = r * CREATURE_WEIGHT_TOTAL;
+        for (let i = 0; i < CREATURE_CATALOG.length; i++) {
+          x -= CREATURE_CATALOG[i].weight;
+          if (x <= 0) return i;
+        }
+        return CREATURE_CATALOG.length - 1;
+      }
+
       scene.fog = new THREE.Fog(0x000000, FOG_NIGHT_NEAR, FOG_NIGHT_FAR);
       const clock = new THREE.Clock();
 
@@ -1084,6 +1179,8 @@
       const props = [];
       const trees = [];
       const targets = [];
+      const creatures = [];
+      let creatureCapturedCount = 0;
       let capturedCount = 0;
       let targetToastTimer = 0;
       let pondCenterX = 0;
@@ -1177,13 +1274,19 @@
       const modelCache = new Map();
       const _tmpVec3 = new THREE.Vector3();
 
+      // Props and creatures are loaded through this single mechanism so there
+      // is no second, parallel asset-loading path. Both MODEL_DEFS and
+      // CREATURE_CATALOG entries share the { key, file } shape and the same
+      // cache, progress overlay, and procedural fallback.
+      const PRELOAD_DEFS = MODEL_DEFS.concat(CREATURE_CATALOG);
+
       function preloadModels(onProgress) {
         const loader = new GLTFLoader();
-        const total = MODEL_DEFS.length;
+        const total = PRELOAD_DEFS.length;
         let done = 0;
         onProgress(0, total);
         return Promise.all(
-          MODEL_DEFS.map(
+          PRELOAD_DEFS.map(
             (def) =>
               new Promise((resolve) => {
                 loader.load(
@@ -1198,7 +1301,7 @@
                   (err) => {
                     console.warn(
                       `[model-asset-pipeline] Failed to load assets/models/${def.file}; ` +
-                        'falling back to a procedural primitive for this prop.',
+                        'falling back to a procedural primitive for this asset.',
                       err,
                     );
                     modelCache.set(def.key, null);
@@ -1280,6 +1383,19 @@
           target.mesh.material.dispose();
         }
         targets.length = 0;
+      }
+
+      function disposeCreatures() {
+        for (const creature of creatures) {
+          scene.remove(creature.mesh);
+          // Same discipline as disposeProps(): dispose only the per-instance
+          // cloned materials and any geometry the fallback primitive owns.
+          // The shared cached gltf.scene is never disposed, so R can rebuild
+          // creatures from the cache with no refetch.
+          for (const m of creature.materials) m.dispose();
+          for (const g of creature.ownedGeometries) g.dispose();
+        }
+        creatures.length = 0;
       }
 
       const heightGrid = new Float32Array(TERRAIN_GRID * TERRAIN_GRID);
@@ -1645,6 +1761,152 @@
         showTargetToast(TARGET_CATALOG[target.catalogIndex]);
       }
 
+      // Places creatures deterministically from the world seed, grounded on
+      // the terrain, honoring spawn-exclusion, pond keep-out, and
+      // prop/tree/crystal/creature clearance. Mirrors generateTargets()'s
+      // structure and reuses generate()'s normalize-and-ground approach plus
+      // the shared model-asset pipeline (buildPropInstance).
+      function generateCreatures() {
+        disposeCreatures();
+        creatureCapturedCount = 0;
+        const creatureRng = mulberry32(seed ^ 0x6c1f7);
+        for (let i = 0; i < CREATURE_COUNT; i++) {
+          for (let attempt = 0; attempt < CREATURE_PLACEMENT_ATTEMPTS; attempt++) {
+            const catalogIndex = pickCreatureIndex(creatureRng());
+            const def = CREATURE_CATALOG[catalogIndex];
+            const posX = -CREATURE_PLACEMENT_HALF + creatureRng() * 2 * CREATURE_PLACEMENT_HALF;
+            const posZ = -CREATURE_PLACEMENT_HALF + creatureRng() * 2 * CREATURE_PLACEMENT_HALF;
+            const rotY = creatureRng() * Math.PI * 2;
+            const phase = creatureRng() * Math.PI * 2;
+
+            const sdx = posX - SPAWN_X;
+            const sdz = posZ - SPAWN_Z;
+            if (sdx * sdx + sdz * sdz < CREATURE_SPAWN_EXCLUSION * CREATURE_SPAWN_EXCLUSION) continue;
+
+            const pdx = posX - pondCenterX;
+            const pdz = posZ - pondCenterZ;
+            if (pdx * pdx + pdz * pdz < CREATURE_POND_KEEPOUT * CREATURE_POND_KEEPOUT) continue;
+
+            // Build + normalize exactly as generate() does for props: uniform
+            // scale to the footprint, apply the random Y rotation, then ground
+            // the lowest point on the terrain.
+            const built = buildPropInstance(def);
+            const root = built.root;
+            root.position.set(0, 0, 0);
+            root.rotation.set(0, 0, 0);
+            root.scale.set(1, 1, 1);
+            root.updateMatrixWorld(true);
+            const rawSize = new THREE.Box3().setFromObject(root).getSize(_tmpVec3);
+            const maxHoriz = Math.max(rawSize.x, rawSize.z) || 1;
+            root.scale.setScalar(def.footprint / maxHoriz);
+            root.rotation.y = rotY;
+            root.updateMatrixWorld(true);
+            const localBox = new THREE.Box3().setFromObject(root);
+            const baseY = heightAt(posX, posZ);
+            root.position.set(posX, baseY - localBox.min.y, posZ);
+            root.updateMatrixWorld(true);
+            const worldBox = new THREE.Box3().setFromObject(root);
+            const size = worldBox.getSize(_tmpVec3);
+            const radius = 0.5 * Math.max(size.x, size.z);
+            const frameRadius = 0.5 * Math.max(size.x, size.y, size.z);
+
+            let overlapsProp = false;
+            for (const p of props) {
+              const cx = Math.max(p.aabb.minX, Math.min(posX, p.aabb.maxX));
+              const cz = Math.max(p.aabb.minZ, Math.min(posZ, p.aabb.maxZ));
+              const ddx = posX - cx;
+              const ddz = posZ - cz;
+              const clr = radius + CREATURE_PROP_BUFFER;
+              if (ddx * ddx + ddz * ddz < clr * clr) {
+                overlapsProp = true;
+                break;
+              }
+            }
+            if (overlapsProp) {
+              disposePropInstance(built);
+              continue;
+            }
+
+            let overlapsTree = false;
+            for (const t of trees) {
+              const ddx = posX - t.centerX;
+              const ddz = posZ - t.centerZ;
+              const r = radius + t.foliageRadius + CREATURE_TREE_BUFFER;
+              if (ddx * ddx + ddz * ddz < r * r) {
+                overlapsTree = true;
+                break;
+              }
+            }
+            if (overlapsTree) {
+              disposePropInstance(built);
+              continue;
+            }
+
+            let overlapsTarget = false;
+            for (const other of targets) {
+              const ddx = posX - other.centerX;
+              const ddz = posZ - other.centerZ;
+              const r = radius + TARGET_RADIUS + CREATURE_OTHER_BUFFER;
+              if (ddx * ddx + ddz * ddz < r * r) {
+                overlapsTarget = true;
+                break;
+              }
+            }
+            if (overlapsTarget) {
+              disposePropInstance(built);
+              continue;
+            }
+
+            let overlapsCreature = false;
+            for (const other of creatures) {
+              const ddx = posX - other.centerX;
+              const ddz = posZ - other.centerZ;
+              const r = radius + other.radius + CREATURE_OTHER_BUFFER;
+              if (ddx * ddx + ddz * ddz < r * r) {
+                overlapsCreature = true;
+                break;
+              }
+            }
+            if (overlapsCreature) {
+              disposePropInstance(built);
+              continue;
+            }
+
+            const creature = {
+              mesh: root,
+              materials: built.materials,
+              ownedGeometries: built.ownedGeometries,
+              centerX: posX,
+              centerZ: posZ,
+              baseY: root.position.y,
+              baseRotY: rotY,
+              radius,
+              frameRadius,
+              phase,
+              captured: false,
+              catalogIndex,
+            };
+            root.userData.creatureRef = creature;
+            scene.add(root);
+            creatures.push(creature);
+            break;
+          }
+        }
+        updateCatalogCounter();
+      }
+
+      function captureCreature(creature) {
+        creature.captured = true;
+        for (const m of creature.materials) {
+          m.color.multiplyScalar(CREATURE_CAPTURED_DIM);
+        }
+        creature.mesh.position.y = creature.baseY;
+        creature.mesh.rotation.y = creature.baseRotY;
+        creatureCapturedCount++;
+        updateCatalogCounter();
+        showTargetToast(CREATURE_CATALOG[creature.catalogIndex]);
+      }
+
       function computeSupportY(x, z) {
         let supportY = heightAt(x, z);
         for (const prop of props) {
@@ -1722,6 +1984,7 @@
         generate(seed);
         generateTrees();
         generateTargets();
+        generateCreatures();
         assetsReady = true;
         lockTitleEl.textContent = 'Click to play';
         lockStatusEl.textContent = 'Models ready';
@@ -1775,6 +2038,7 @@
           generate(seed);
           generateTrees();
           generateTargets();
+          generateCreatures();
           resetPlayerToSpawn();
           // Re-sync touch look to the reset orientation and release the
           // joystick so nothing is left stale (mirrors desktop KeyR, which
@@ -1799,13 +2063,25 @@
         let focusLocked = false;
         if (cameraMode) {
           raycaster.setFromCamera(aimNdc, camera);
-          const hittables = props.map((p) => p.mesh).concat(targets.map((t) => t.mesh));
+          const hittables = props
+            .map((p) => p.mesh)
+            .concat(targets.map((t) => t.mesh))
+            .concat(creatures.map((c) => c.mesh));
           const hits = raycaster.intersectObjects(hittables, true);
           if (hits.length > 0) {
             const hitObject = hits[0].object;
             const hitTarget = targets.find((t) => t.mesh === hitObject);
             if (hitTarget && !hitTarget.captured && isTargetFramed(hitTarget)) {
               focusLocked = true;
+            } else {
+              const hitCreature = resolveCreatureFromHit(hitObject);
+              if (
+                hitCreature &&
+                !hitCreature.captured &&
+                isTargetFramed(hitCreature, hitCreature.frameRadius)
+              ) {
+                focusLocked = true;
+              }
             }
           }
         }
@@ -1823,6 +2099,20 @@
             target.baseY +
             TARGET_BOB_AMPLITUDE * Math.sin(elapsed * TARGET_BOB_FREQUENCY + target.phase);
           target.mesh.rotation.y = elapsed * 0.6 + target.phase;
+        }
+
+        // Subtle, non-AI idle: a small grounded bob plus a gentle yaw sway
+        // around the placement rotation (no locomotion/pathing). No per-frame
+        // allocation — scalars only, mirroring the crystal bob above.
+        for (const creature of creatures) {
+          if (creature.captured) continue;
+          creature.mesh.position.y =
+            creature.baseY +
+            CREATURE_BOB_AMPLITUDE *
+              Math.sin(elapsed * CREATURE_BOB_FREQUENCY + creature.phase);
+          creature.mesh.rotation.y =
+            creature.baseRotY +
+            CREATURE_SWAY_AMPLITUDE * Math.sin(elapsed * 0.5 + creature.phase);
         }
 
         if (infoTimer > 0) {
